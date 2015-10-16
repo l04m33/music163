@@ -102,12 +102,14 @@ class Music163API:
     )
 
     song_detail = APIFunc(
-        '/api/song/detail',
-        params=['ids'],
+        '/weapi/song/detail',
+        encrypted=True,
+        data=['ids'],
     )
 
     personal_fm = APIFunc(
-        '/api/radio/get',
+        '/weapi/radio/get',
+        encrypted=True,
     )
 
     ENC_IV = b'0102030405060708'
