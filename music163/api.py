@@ -1,0 +1,238 @@
+import types
+import base64
+import codecs
+import json
+import random
+import hashlib
+import urllib.parse as urlparse
+
+import requests
+from Crypto.Cipher import AES
+from Crypto import Random
+
+
+MUSIC_163_DOMAIN = 'music.163.com'
+MUSIC_163_SCHEME = 'http'
+
+
+class APIError(Exception):
+    pass
+
+
+class APISession(requests.Session):
+    def __init__(self):
+        super(APISession, self).__init__()
+        # This referer header is needed for passing cross-site-request checks
+        headers = {
+            'Referer': urlparse.urlunparse((
+                MUSIC_163_SCHEME, MUSIC_163_DOMAIN, '/', '', '', ''))
+        }
+        self.headers.update(headers)
+
+
+class APIFunc:
+    def __init__(self, api_path, encrypted=False,
+                 params=None, data=None, **kwargs):
+        self.api_url = \
+            self._build_api_url(MUSIC_163_SCHEME, MUSIC_163_DOMAIN, api_path)
+        self.encrypted = encrypted
+        self.params = params or []
+
+        if encrypted:
+            self.data = data or []
+        else:
+            if data is not None and len(data) > 0:
+                raise APIError('Cannot post data without encryption')
+            self.data = []
+
+        self.kwargs = kwargs
+
+    def __call__(self, api_obj, *args):
+        args_num = len(self.params) + len(self.data)
+        if len(args) != args_num:
+            raise APIError(
+                'wrong argument number for {}: {} needed, got {}'.format(
+                    self.api_url, args_num, len(args)))
+        args = list(args)
+        r_params = {}
+        for p in self.params:
+            r_params[p] = args.pop(0)
+
+        if self.encrypted:
+            r_data = {}
+            for d in self.data:
+                r_data[d] = args.pop(0)
+            return api_obj.call_encrypted_api(
+                self.api_url, params=r_params, data=r_data, **self.kwargs)
+        else:
+            return api_obj.call_api(
+                self.api_url, params=r_params, **self.kwargs)
+
+    def _build_api_url(self, scheme, loc, path):
+        return urlparse.urlunparse((
+            scheme, loc, path,
+            '',     # params
+            '',     # query
+            '',     # fragment
+        ))
+
+
+class Music163API:
+    PREFERED_SERVERS = [
+        # 'm1.music.126.net',
+        'm2.music.126.net',
+    ]
+
+    login = APIFunc(
+        '/weapi/login/cellphone',
+        encrypted=True,
+        data=['phone', 'password', 'rememberLogin'],
+        csrf=False,
+    )
+
+    refresh = APIFunc(
+        '/weapi/login/token/refresh',
+        encrypted=True,
+    )
+
+    playlist_detail = APIFunc(
+        '/weapi/playlist/detail',
+        encrypted=True,
+        data=['id'],
+    )
+
+    song_detail = APIFunc(
+        '/api/song/detail',
+        params=['ids'],
+    )
+
+    personal_fm = APIFunc(
+        '/api/radio/get',
+    )
+
+    ENC_IV = b'0102030405060708'
+    ENC_PUB_KEY = b'010001'
+    ENC_MODULUS = \
+        b'00e0b509f6259df8642dbc35662901477df22677ec152b5ff68ace615bb7b725' + \
+        b'152b3ab17a876aea8a5aa76d2e417629ec4ee341f56135fccf695280104e0312' + \
+        b'ecbda92557c93870114af6c9d05c4f7f0c3685b7a46bee255932575cce10b424' + \
+        b'd813cfe4875d3e82047b97ddef52741d546b8e289dc6935b3ece0462db0a22b8e7'
+    ENC_KEY0 = b'0CoJUm6Qyw8W8jud'
+
+    ENC_SONG_ID_MAGIC = b'3go8&$8*3*3h0k(2)2'
+
+    def __new__(cls, *args, **kwargs):
+        obj = super(Music163API, cls).__new__(cls)
+        for a in dir(obj):
+            attr = getattr(obj, a)
+            if isinstance(attr, APIFunc):
+                setattr(obj, a, types.MethodType(attr, obj))
+        return obj
+
+    def __init__(self, session=None):
+        if session is None:
+            session = APISession()
+        self.session = session
+        self.rand = Random.new()
+
+    def decrypt_song_id(self, eid):
+        song_id = bytearray(str(eid), 'ascii')
+        magic_len = len(self.ENC_SONG_ID_MAGIC)
+        for i in range(len(song_id)):
+            song_id[i] = song_id[i] ^ self.ENC_SONG_ID_MAGIC[i % magic_len]
+        m = hashlib.md5(song_id)
+        result = base64.b64encode(m.digest())
+        result = result.replace(b'/', b'_')
+        result = result.replace(b'+', b'-')
+        return result
+
+    def get_best_song_url(self, song_detail):
+        if song_detail['bMusic']:
+            info = song_detail['bMusic']
+        elif song_detail['hMusic']:
+            info = song_detail['hMusic']
+        elif song_detail['mMusic']:
+            info = song_detail['mMusic']
+        elif song_detail['lMusic']:
+            info = song_detail['lMusic']
+        else:
+            return song_detail['mp3Url']
+
+        dfs_id = info['dfsId']
+        enc_id = self.decrypt_song_id(dfs_id)
+        url = urlparse.urlunparse((
+            'http',
+            random.choice(self.PREFERED_SERVERS),
+            '/{}/{}.{}'.format(enc_id.decode(), dfs_id, info['extension']),
+            '',     # params
+            '',     # query
+            '',     # fragment
+        ))
+        return url
+
+    def gen_enc_key(self):
+        return codecs.encode(self.rand.read(8), 'hex')
+
+    def aes_encrypt(self, msg, key):
+        pad = 16 - len(msg) % 16
+        pad_bytes = bytearray(1)
+        pad_bytes[0] = pad
+        pad_bytes = pad_bytes * pad
+        msg = msg + pad_bytes
+        encryptor = AES.new(key, AES.MODE_CBC, self.ENC_IV)
+        ciphertext = encryptor.encrypt(msg)
+        ciphertext = base64.b64encode(ciphertext)
+        return ciphertext
+
+    def rsa_encrypt(self, msg):
+        msg = msg[::-1]
+        rs = int(codecs.encode(msg, 'hex'), 16) \
+            ** int(self.ENC_PUB_KEY, 16) \
+            % int(self.ENC_MODULUS, 16)
+        return '{:0256x}'.format(rs).encode()
+
+    def encrypt_data(self, data, enc_key):
+        data = json.dumps(data).encode()
+        enc_payload = \
+            self.aes_encrypt(
+                self.aes_encrypt(data, self.ENC_KEY0),
+                enc_key)
+        enc_key = self.rsa_encrypt(enc_key)
+        enc_data = {
+            b'params': enc_payload,
+            b'encSecKey': enc_key,
+        }
+        return enc_data
+
+    def _look_for_csrf_token(self, cookie_jar):
+        for c in cookie_jar:
+            if c.name == '__csrf' and c.domain == MUSIC_163_DOMAIN:
+                return c.value
+        return None
+
+    def call_api(self, api_url, params=None):
+        if params is None:
+            params = {}
+        resp = self.session.get(api_url, params=params)
+        return resp.json()
+
+    def call_encrypted_api(self, api_url, params=None, data=None, csrf=True):
+        if csrf:
+            csrf_token = self._look_for_csrf_token(self.session.cookies)
+            if csrf_token is None:
+                raise APIError('No __csrf token')
+            real_params = {'csrf_token': csrf_token}
+            if params is not None:
+                real_params.update(params)
+        else:
+            real_params = {}
+
+        enc_key = self.gen_enc_key()
+
+        if data is None:
+            enc_data = self.encrypt_data({}, enc_key)
+        else:
+            enc_data = self.encrypt_data(data, enc_key)
+
+        resp = self.session.post(api_url, params=real_params, data=enc_data)
+        return resp.json()
