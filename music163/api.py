@@ -222,10 +222,10 @@ class Music163API:
             if csrf_token is None:
                 raise APIError('No __csrf token')
             real_params = {'csrf_token': csrf_token}
-            if params is not None:
-                real_params.update(params)
         else:
             real_params = {}
+        if params is not None:
+            real_params.update(params)
 
         enc_key = self.gen_enc_key()
 
