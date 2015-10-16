@@ -147,9 +147,7 @@ class Music163API:
         return result
 
     def get_best_song_url(self, song_detail):
-        if song_detail['bMusic']:
-            info = song_detail['bMusic']
-        elif song_detail['hMusic']:
+        if song_detail['hMusic']:
             info = song_detail['hMusic']
         elif song_detail['mMusic']:
             info = song_detail['mMusic']
