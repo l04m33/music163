@@ -38,7 +38,7 @@ setup(
     author='Kay Zheng',
     author_email='l04m33@gmail.com',
     url='https://github.com/l04m33/music163',
-    license='http://l04m33.mit-license.org/',
+    license='MIT',
     zip_safe=False,
     install_requires=[
         'lxml >= 3.4.4',
