@@ -41,25 +41,31 @@ The session cookies for current user are stored in ~/.music163.cookies.
 
 Only phone numbers can be used here. I may add user name support later.
 
-Retrieving URLs from a playlist:
+Retrieving a playlist:
 
 .. code-block:: sh
 
     music163 play playlist <playlist id>
 
-Retrieving URLs for songs:
+Retrieving individual songs:
 
 .. code-block:: sh
 
     music163 play song <song id> [<song id 2> ...]
 
-Retrieving URLs from a web page:
+Retrieving songs from a web page:
 
 .. code-block:: sh
 
     music163 play page <page url>
 
-The retrieved URLs can be fed directly into the player of your choice:
+Retrieving random song recommendations:
+
+.. code-block:: sh
+
+    music163 play radio <# of recommended songs>
+
+The retrieved info can be fed directly into the player of your choice:
 
 .. code-block:: sh
 
@@ -70,3 +76,11 @@ Or, for better interaction, do some redirects to enable controls:
 .. code-block:: sh
 
     music163 play page /discover/recommend/taste | mplayer -playlist /dev/fd/3 3<&0 0</dev/tty
+
+############
+Legal Notice
+############
+
+This piece of code will NOT download any music content for you. And
+please note that it may be ILLEGAL to download/store/demonstrate
+copyrighted content without permission from the copyright holders.
