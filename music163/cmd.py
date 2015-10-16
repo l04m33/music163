@@ -92,6 +92,20 @@ def cmd_play_page(api, argv):
         print(api.get_best_song_url(s))
 
 
+def cmd_play_radio(api, argv):
+    n_songs = int(argv.pop(0))
+    song_list = []
+    while len(song_list) < n_songs:
+        r = api.personal_fm()
+        if r['code'] != 200:
+            raise FailedCmdError('play radio {}'.format(n_songs))
+        for s in r['data']:
+            song_list.append(api.get_best_song_url(s))
+
+    for u in song_list[:n_songs]:
+        print(u)
+
+
 commands = {
     'login':   cmd_login,
     'refresh': cmd_refresh,
@@ -99,6 +113,7 @@ commands = {
         'playlist': cmd_play_playlist,
         'song':     cmd_play_song,
         'page':     cmd_play_page,
+        'radio':    cmd_play_radio,
     }
 }
 
