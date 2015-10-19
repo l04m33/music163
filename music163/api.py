@@ -8,6 +8,7 @@ import urllib.parse as urlparse
 
 import requests
 from Crypto.Cipher import AES
+from Crypto.PublicKey import RSA
 from Crypto import Random
 
 
@@ -112,14 +113,18 @@ class Music163API:
         encrypted=True,
     )
 
-    ENC_IV = b'0102030405060708'
-    ENC_PUB_KEY = b'010001'
-    ENC_MODULUS = \
-        b'00e0b509f6259df8642dbc35662901477df22677ec152b5ff68ace615bb7b725' + \
-        b'152b3ab17a876aea8a5aa76d2e417629ec4ee341f56135fccf695280104e0312' + \
-        b'ecbda92557c93870114af6c9d05c4f7f0c3685b7a46bee255932575cce10b424' + \
-        b'd813cfe4875d3e82047b97ddef52741d546b8e289dc6935b3ece0462db0a22b8e7'
-    ENC_KEY0 = b'0CoJUm6Qyw8W8jud'
+    ENC_RSA_KEY = RSA.construct((
+        int(b'00e0b509f6259df8642dbc3566290147' +
+            b'7df22677ec152b5ff68ace615bb7b725' +
+            b'152b3ab17a876aea8a5aa76d2e417629' +
+            b'ec4ee341f56135fccf695280104e0312' +
+            b'ecbda92557c93870114af6c9d05c4f7f' +
+            b'0c3685b7a46bee255932575cce10b424' +
+            b'd813cfe4875d3e82047b97ddef52741d' +
+            b'546b8e289dc6935b3ece0462db0a22b8e7', 16),
+        0x010001))
+    ENC_AES_IV = b'0102030405060708'
+    ENC_AES_KEY0 = b'0CoJUm6Qyw8W8jud'
 
     ENC_SONG_ID_MAGIC = b'3go8&$8*3*3h0k(2)2'
 
@@ -179,23 +184,21 @@ class Music163API:
         pad_bytes[0] = pad
         pad_bytes = pad_bytes * pad
         msg = msg + pad_bytes
-        encryptor = AES.new(key, AES.MODE_CBC, self.ENC_IV)
+        encryptor = AES.new(key, AES.MODE_CBC, self.ENC_AES_IV)
         ciphertext = encryptor.encrypt(msg)
         ciphertext = base64.b64encode(ciphertext)
         return ciphertext
 
     def rsa_encrypt(self, msg):
-        msg = msg[::-1]
-        rs = int(codecs.encode(msg, 'hex'), 16) \
-            ** int(self.ENC_PUB_KEY, 16) \
-            % int(self.ENC_MODULUS, 16)
-        return '{:0256x}'.format(rs).encode()
+        rs = self.ENC_RSA_KEY.encrypt(msg[::-1], b'')[0]
+        rs = codecs.encode(rs, 'hex')
+        return rs.decode()
 
     def encrypt_data(self, data, enc_key):
         data = json.dumps(data).encode()
         enc_payload = \
             self.aes_encrypt(
-                self.aes_encrypt(data, self.ENC_KEY0),
+                self.aes_encrypt(data, self.ENC_AES_KEY0),
                 enc_key)
         enc_key = self.rsa_encrypt(enc_key)
         enc_data = {
