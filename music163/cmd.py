@@ -1,3 +1,4 @@
+import sys
 import io
 import re
 import hashlib
@@ -5,6 +6,7 @@ import urllib.parse as urlparse
 
 from lxml import etree
 from .api import (MUSIC_163_SCHEME, MUSIC_163_DOMAIN)
+from .playlist import (DEFAULT_PLAYLIST_FORMAT, generate_playlist)
 
 
 class InvalidCmdError(Exception):
@@ -39,19 +41,25 @@ def cmd_play_playlist(api, argv):
     if r['code'] != 200:
         raise FailedCmdError('play playlist {}'.format(playlist_id))
 
-    for t in r['result']['tracks']:
-        print(api.get_best_song_url(t))
+    _cmd_generate_playlist(argv, api, r['result']['tracks'])
 
 
 def cmd_play_song(api, argv):
-    song_ids = [str(int(i)) for i in argv]
+    song_ids = []
+    for i in range(len(argv)):
+        try:
+            str_i = str(int(argv[0]))
+            argv.pop(0)
+        except ValueError:
+            break
+        song_ids.append(str_i)
+
     song_ids_str = '[{}]'.format(','.join(song_ids))
     r = api.song_detail(song_ids_str)
     if r['code'] != 200:
         raise FailedCmdError('play song {}'.format(song_ids_str))
 
-    for s in r['songs']:
-        print(api.get_best_song_url(s))
+    _cmd_generate_playlist(argv, api, r['songs'])
 
 
 def cmd_play_page(api, argv):
@@ -88,22 +96,27 @@ def cmd_play_page(api, argv):
     if r['code'] != 200:
         raise FailedCmdError('play page {}'.format(page_url))
 
-    for s in r['songs']:
-        print(api.get_best_song_url(s))
+    _cmd_generate_playlist(argv, api, r['songs'])
 
 
 def cmd_play_radio(api, argv):
     n_songs = int(argv.pop(0))
+
     song_list = []
     while len(song_list) < n_songs:
         r = api.personal_fm()
         if r['code'] != 200:
             raise FailedCmdError('play radio {}'.format(n_songs))
-        for s in r['data']:
-            song_list.append(api.get_best_song_url(s))
+        song_list.extend(r['data'])
 
-    for u in song_list[:n_songs]:
-        print(u)
+    _cmd_generate_playlist(argv, api, song_list[:n_songs])
+
+
+def _cmd_generate_playlist(argv, api, song_list):
+    pl_format = DEFAULT_PLAYLIST_FORMAT
+    if len(argv) > 0:
+        pl_format = argv.pop(0)
+    generate_playlist(pl_format, api, song_list, sys.stdout)
 
 
 commands = {
