@@ -77,6 +77,14 @@ Or, for better interaction, do some redirects to enable controls:
 
     music163 play page /discover/recommend/taste | mplayer -playlist /dev/fd/3 3<&0 0</dev/tty
 
+You can append ``pls`` to all ``play`` commands, to generate a playlist in `pls format`_ :
+
+.. code-block:: sh
+
+    music163 play radio 10 pls
+
+.. _pls format: https://en.wikipedia.org/wiki/PLS_%28file_format%29
+
 ############
 Legal Notice
 ############
