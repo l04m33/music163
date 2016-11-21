@@ -65,6 +65,12 @@ Retrieving random song recommendations:
 
     music163 play radio <# of recommended songs>
 
+Retrieving daily song recommendations:
+
+.. code-block:: sh
+
+    music163 play recommended
+
 The retrieved info can be fed directly into the player of your choice:
 
 .. code-block:: sh

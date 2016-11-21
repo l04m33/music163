@@ -5,18 +5,29 @@ import configparser
 DEFAULT_PLAYLIST_FORMAT = 'simple'
 
 
-def generate_simple(api, song_list, out_file):
-    for s in song_list:
-        print(api.get_best_song_url(s), file=out_file)
+def fetch_song_urls(api, song_list, br):
+    song_ids_str = '[{}]'.format(','.join([str(s['id']) for s in song_list]))
+    r = api.song_enhance_player_url(song_ids_str, br)
+    if r['code'] != 200:
+        raise RuntimeError('Failed to fetch song URLs')
+    return r['data']
 
 
-def generate_pls(api, song_list, out_file):
+def generate_simple(api, song_list, bit_rate, out_file):
+    urls = fetch_song_urls(api, song_list, bit_rate)
+    for u in urls:
+        print(u['url'].strip(), file=out_file)
+
+
+def generate_pls(api, song_list, bit_rate, out_file):
+    urls = fetch_song_urls(api, song_list, bit_rate)
+
     cp = configparser.ConfigParser()
     cp = configparser.RawConfigParser()
     cp.optionxform = lambda option: option  # Retain cases
     cp.add_section('playlist')
-    for i, s in enumerate(song_list, 1):
-        cp['playlist']['File{}'.format(i)] = api.get_best_song_url(s)
+    for i, (s, u) in enumerate(zip(song_list, urls), 1):
+        cp['playlist']['File{}'.format(i)] = u['url']
         artist_names = [a['name'] for a in s['artists']]
         cp['playlist']['Title{}'.format(i)] = \
             '{} - {}'.format(s['name'], ','.join(artist_names))
@@ -32,6 +43,6 @@ _playlist_formats = {
 }
 
 
-def generate_playlist(pl_format, api, song_list, out_file):
+def generate_playlist(pl_format, bit_rate, api, song_list, out_file):
     gen_func = _playlist_formats[pl_format]
-    gen_func(api, song_list, out_file)
+    gen_func(api, song_list, bit_rate, out_file)

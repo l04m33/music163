@@ -9,6 +9,9 @@ from .api import (MUSIC_163_SCHEME, MUSIC_163_DOMAIN)
 from .playlist import (DEFAULT_PLAYLIST_FORMAT, generate_playlist)
 
 
+DEFAULT_BIT_RATE = 320000
+
+
 class InvalidCmdError(Exception):
     pass
 
@@ -22,6 +25,7 @@ def cmd_login(api, argv):
     hashed_password = hashlib.md5(argv.pop(0).encode()).hexdigest()
     r = api.login(username, hashed_password, 'true')
     if r['code'] != 200:
+        print(r, file=sys.stderr)
         raise FailedCmdError('login')
     api.session.cookies.save()
     print('Done.')
@@ -30,6 +34,7 @@ def cmd_login(api, argv):
 def cmd_refresh(api, argv):
     r = api.refresh()
     if r['code'] != 200:
+        print(r, file=sys.stderr)
         raise FailedCmdError('refresh')
     api.session.cookies.save()
     print('Done.')
@@ -39,6 +44,7 @@ def cmd_play_playlist(api, argv):
     playlist_id = int(argv.pop(0))
     r = api.playlist_detail(playlist_id)
     if r['code'] != 200:
+        print(r, file=sys.stderr)
         raise FailedCmdError('play playlist {}'.format(playlist_id))
 
     _cmd_generate_playlist(argv, api, r['result']['tracks'])
@@ -57,6 +63,7 @@ def cmd_play_song(api, argv):
     song_ids_str = '[{}]'.format(','.join(song_ids))
     r = api.song_detail(song_ids_str)
     if r['code'] != 200:
+        print(r, file=sys.stderr)
         raise FailedCmdError('play song {}'.format(song_ids_str))
 
     _cmd_generate_playlist(argv, api, r['songs'])
@@ -94,6 +101,7 @@ def cmd_play_page(api, argv):
     song_ids_str = '[{}]'.format(','.join(song_ids))
     r = api.song_detail(song_ids_str)
     if r['code'] != 200:
+        print(r, file=sys.stderr)
         raise FailedCmdError('play page {}'.format(page_url))
 
     _cmd_generate_playlist(argv, api, r['songs'])
@@ -106,17 +114,32 @@ def cmd_play_radio(api, argv):
     while len(song_list) < n_songs:
         r = api.personal_fm()
         if r['code'] != 200:
+            print(r, file=sys.stderr)
             raise FailedCmdError('play radio {}'.format(n_songs))
         song_list.extend(r['data'])
 
     _cmd_generate_playlist(argv, api, song_list[:n_songs])
 
 
+def cmd_play_recommended(api, argv):
+    r = api.discovery_recommend_songs()
+    if r['code'] != 200:
+        print(r, file=sys.stderr)
+        raise FailedCmdError('play recommended')
+
+    _cmd_generate_playlist(argv, api, r['recommend'])
+
+
 def _cmd_generate_playlist(argv, api, song_list):
     pl_format = DEFAULT_PLAYLIST_FORMAT
     if len(argv) > 0:
         pl_format = argv.pop(0)
-    generate_playlist(pl_format, api, song_list, sys.stdout)
+
+    bit_rate = DEFAULT_BIT_RATE
+    if len(argv) > 0:
+        bit_rate = argv.pop(0)
+
+    generate_playlist(pl_format, bit_rate, api, song_list, sys.stdout)
 
 
 commands = {
@@ -127,6 +150,7 @@ commands = {
         'song':     cmd_play_song,
         'page':     cmd_play_page,
         'radio':    cmd_play_radio,
+        'recommended': cmd_play_recommended,
     }
 }
 

@@ -13,7 +13,7 @@ from Crypto import Random
 
 
 MUSIC_163_DOMAIN = 'music.163.com'
-MUSIC_163_SCHEME = 'http'
+MUSIC_163_SCHEME = 'https'
 
 
 class APIError(Exception):
@@ -113,6 +113,17 @@ class Music163API:
         encrypted=True,
     )
 
+    discovery_recommend_songs = APIFunc(
+        '/weapi/v1/discovery/recommend/songs',
+        encrypted=True,
+    )
+
+    song_enhance_player_url = APIFunc(
+        '/weapi/song/enhance/player/url',
+        encrypted=True,
+        data=['ids', 'br'],
+    )
+
     ENC_RSA_KEY = RSA.construct((
         int(b'00e0b509f6259df8642dbc3566290147' +
             b'7df22677ec152b5ff68ace615bb7b725' +
@@ -141,39 +152,6 @@ class Music163API:
             session = APISession()
         self.session = session
         self.rand = Random.new()
-
-    def decrypt_song_id(self, eid):
-        song_id = bytearray(str(eid), 'ascii')
-        magic_len = len(self.ENC_SONG_ID_MAGIC)
-        for i in range(len(song_id)):
-            song_id[i] = song_id[i] ^ self.ENC_SONG_ID_MAGIC[i % magic_len]
-        m = hashlib.md5(song_id)
-        result = base64.b64encode(m.digest())
-        result = result.replace(b'/', b'_')
-        result = result.replace(b'+', b'-')
-        return result
-
-    def get_best_song_url(self, song_detail):
-        if song_detail['hMusic']:
-            info = song_detail['hMusic']
-        elif song_detail['mMusic']:
-            info = song_detail['mMusic']
-        elif song_detail['lMusic']:
-            info = song_detail['lMusic']
-        else:
-            return song_detail['mp3Url']
-
-        dfs_id = info['dfsId']
-        enc_id = self.decrypt_song_id(dfs_id)
-        url = urlparse.urlunparse((
-            'http',
-            random.choice(self.PREFERED_SERVERS),
-            '/{}/{}.{}'.format(enc_id.decode(), dfs_id, info['extension']),
-            '',     # params
-            '',     # query
-            '',     # fragment
-        ))
-        return url
 
     def gen_enc_key(self):
         return codecs.encode(self.rand.read(8), 'hex')
