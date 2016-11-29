@@ -133,7 +133,11 @@ def cmd_play_recommended(api, argv):
 
 
 def cmd_player(api, argv):
-    player = Mpg123(api=api)
+    try:
+        binary = argv.pop(0)
+    except IndexError:
+        binary = None
+    player = Mpg123(api=api, binary=binary)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(player.run())
 
