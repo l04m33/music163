@@ -1,12 +1,14 @@
 import sys
 import io
 import re
+import asyncio
 import hashlib
 import urllib.parse as urlparse
 
 from lxml import etree
 from .api import (MUSIC_163_SCHEME, MUSIC_163_DOMAIN)
 from .playlist import (DEFAULT_PLAYLIST_FORMAT, generate_playlist)
+from .player import Mpg123
 
 
 DEFAULT_BIT_RATE = 320000
@@ -130,6 +132,12 @@ def cmd_play_recommended(api, argv):
     _cmd_generate_playlist(argv, api, r['recommend'])
 
 
+def cmd_player(api, argv):
+    player = Mpg123(api=api)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(player.run())
+
+
 def _cmd_generate_playlist(argv, api, song_list):
     pl_format = DEFAULT_PLAYLIST_FORMAT
     if len(argv) > 0:
@@ -151,7 +159,8 @@ commands = {
         'page':     cmd_play_page,
         'radio':    cmd_play_radio,
         'recommended': cmd_play_recommended,
-    }
+    },
+    'player': cmd_player,
 }
 
 
