@@ -101,6 +101,7 @@ class Mpg123:
         self.reader_handle.cancel()
         self.dispatcher_handle.cancel()
         self.process.kill()
+        await self.process.wait()
 
     async def read_cmd(self):
         async for line in self.stdio[0]:
