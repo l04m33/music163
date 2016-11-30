@@ -17,7 +17,8 @@ Just clone this repo, and use pip or tools alike:
     git clone https://github.com/l04m33/music163
     pip install ./music163
 
-Or, you can also use the cloned module as-is:
+Or, you can also use the cloned module as-is, provided the dependencies
+(See ``setup.py``) are properly installed:
 
 .. code-block:: sh
 
@@ -39,7 +40,7 @@ Logging in to the music service:
 
 The session cookies for current user are stored in ~/.music163.cookies.
 
-Only phone numbers can be used here. I may add user name support later.
+Only phone numbers can be used here. User name support may be added later.
 
 Retrieving a playlist:
 
@@ -77,17 +78,36 @@ The retrieved info can be fed directly into the player of your choice:
 
     music163 play page /discover/recommend/taste | mplayer -playlist -
 
-Or, for better interaction, do some redirects to enable controls:
-
-.. code-block:: sh
-
-    music163 play page /discover/recommend/taste | mplayer -playlist /dev/fd/3 3<&0 0</dev/tty
-
 You can append ``pls`` to all ``play`` commands, to generate a playlist in `pls format`_ :
 
 .. code-block:: sh
 
     music163 play radio 10 pls
+
+Instead of retrieving music info and manually feed it into a player,
+you can run the simple internal player (Using ``mpg123`` as backend):
+
+.. code-block:: sh
+
+    music163 player
+
+The internal player has a CLI, and all the ``play`` commands can also be
+invoked in the player CLI. For example:
+
+.. code-block:: sh
+
+    ❯ music163 player
+    --  Using player version: MPG123 (ThOr) v8
+    play playlist 1
+    --  Fetching playlist 1...
+    --
+    --  --=<  0. 都是你害的 - 毕书尽  >=--
+    --
+    --  Fetching stream URL...
+    --  Playing
+
+Lines starting with ``--`` are outputs from the player. See
+``music163.player.Mpg123.cmd_handlers`` for all available player commands.
 
 .. _pls format: https://en.wikipedia.org/wiki/PLS_%28file_format%29
 
