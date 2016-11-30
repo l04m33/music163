@@ -254,7 +254,10 @@ class Mpg123:
             if self.shuffle:
                 if isinstance(self.shuffle, bool):
                     self._shuffle_playlist()
-                current_idx = self.shuffle.index(self.current_song)
+                if self.current_song >= 0:
+                    current_idx = self.shuffle.index(self.current_song)
+                else:
+                    current_idx = -1
                 next_idx = (current_idx + 1) % playlist_len
                 next_idx = self.shuffle[next_idx]
             else:
