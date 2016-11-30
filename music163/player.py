@@ -49,6 +49,7 @@ class Mpg123:
         self.current_song = -1
         self.shuffle = False
         self.default_bitrate = 320000
+        self.playing_state = 'stopped'
         self.msg_handlers = {
             b'@R': self._on_version_info,
             b'@E': self._on_error,
@@ -60,11 +61,14 @@ class Mpg123:
         }
         self.cmd_handlers = {
             b'play': self._cmd_play,
+            b'pl': self._cmd_play,
             b'list': self._cmd_list,
             b'ls': self._cmd_list,
             b'shuffle': self._cmd_shuffle,
             b'bitrate': self._cmd_bitrate,
             b'br': self._cmd_bitrate,
+            b'progress': self._cmd_progress,
+            b'pr': self._cmd_progress,
         }
 
     def aprint(self, *args, **kwargs):
@@ -273,7 +277,8 @@ class Mpg123:
 
         what = args[1].lower()
 
-        if what == b'recommended':
+        if what == b'recommended' or \
+                what == b'rec':
             self.aprint('Fetching recommended playlist...')
             r = await self.loop.run_in_executor(
                     None, self.api.discovery_recommend_songs.__call__)
@@ -422,6 +427,11 @@ class Mpg123:
             self.current_song = -1
             asyncio.ensure_future(self.play_next_song())
 
+        elif what == b'none':
+            self.set_playlist([])
+            self.current_song = -1
+            self.cmd_stop()
+
         elif what.isdigit():
             idx = int(what)
             asyncio.ensure_future(self.play_song_in_playlist(idx))
@@ -479,3 +489,24 @@ class Mpg123:
             return
         self.default_bitrate = br
         self.aprint('Default bitrate: {}'.format(self.default_bitrate))
+
+    def _cmd_progress(self, cmd):
+        if self.playing_state == 'playing' and \
+                self.playlist and self.current_song >= 0:
+            display_name = get_song_display_name(
+                    self.playlist[self.current_song])
+            total_frames = self.frame_info[0] + self.frame_info[1]
+            total_seconds = self.frame_info[2] + self.frame_info[3]
+            percent = int(self.frame_info[0] / total_frames * 100)
+            minutes_played = int(self.frame_info[2] // 60)
+            seconds_played = int(self.frame_info[2] % 60)
+            minutes_total = int(total_seconds // 60)
+            seconds_total = int(total_seconds % 60)
+            self.aprint(
+                    '{}. {}  {:2}%  {}:{:02} / {}:{:02}'
+                    .format(self.current_song, display_name,
+                        percent,
+                        minutes_played, seconds_played,
+                        minutes_total, seconds_total))
+        else:
+            self.aprint('Not playing')
