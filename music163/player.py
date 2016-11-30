@@ -244,14 +244,18 @@ class Mpg123:
             return
         self.cmd_load(r['data'][0]['url'])
 
+    def _shuffle_playlist(self):
+        self.shuffle = list(range(len(self.playlist)))
+        random.shuffle(self.shuffle)
+
     async def play_next_song(self):
         playlist_len = len(self.playlist)
         if playlist_len > 0:
             if self.shuffle:
                 if isinstance(self.shuffle, bool):
-                    self.shuffle = list(range(len(self.playlist)))
-                    random.shuffle(self.shuffle)
-                next_idx = (self.current_song + 1) % playlist_len
+                    self._shuffle_playlist()
+                current_idx = self.shuffle.index(self.current_song)
+                next_idx = (current_idx + 1) % playlist_len
                 next_idx = self.shuffle[next_idx]
             else:
                 next_idx = (self.current_song + 1) % playlist_len
@@ -458,16 +462,14 @@ class Mpg123:
                 self.shuffle = False
             else:
                 if self.playlist:
-                    self.shuffle = list(range(len(self.playlist)))
-                    random.shuffle(self.shuffle)
+                    self._shuffle_playlist()
                 else:
                     self.shuffle = True
         elif len(args) > 1:
             if args[1].lower() == 'true' or \
                     (args[1].isdigit() and int(args[1]) != 0):
                 if self.playlist:
-                    self.shuffle = list(range(len(self.playlist)))
-                    random.shuffle(self.shuffle)
+                    self._shuffle_playlist()
                 else:
                     self.shuffle = True
             elif args[1].lower() == 'false' or \
