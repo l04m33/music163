@@ -124,6 +124,12 @@ class Music163API:
         data=['ids', 'br'],
     )
 
+    dj_program_detail = APIFunc(
+        '/weapi/dj/program/detail',
+        encrypted=True,
+        data=['id'],
+    )
+
     ENC_RSA_KEY = RSA.construct((
         int(b'00e0b509f6259df8642dbc3566290147' +
             b'7df22677ec152b5ff68ace615bb7b725' +

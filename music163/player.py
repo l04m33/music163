@@ -435,6 +435,31 @@ class Mpg123:
             self.current_song = -1
             asyncio.ensure_future(self.play_next_song())
 
+        elif what == b'program':
+            if len(args) < 3:
+                self.aprint('Error: Which program to play?')
+                return
+            try:
+                prog_id = int(args[2])
+            except ValueError:
+                self.aprint(
+                        'Error: Invalid program: {}'
+                        .format(args[2].decode()))
+                return
+
+            self.aprint('Fetching program {}...'.format(prog_id))
+            r = await self.loop.run_in_executor(
+                    None, self.api.dj_program_detail.__call__, prog_id)
+            if r['code'] != 200:
+                self.aprint('Error: api: {}'.format(r))
+                self.aprint(
+                        'Error: Failed to fetch program: {}'
+                        .format(prog_id))
+                return
+            self.set_playlist([r['program']['mainSong']])
+            self.current_song = -1
+            asyncio.ensure_future(self.play_next_song())
+
         elif what == b'none':
             self.set_playlist([])
             self.current_song = -1
