@@ -38,6 +38,7 @@ class Mpg123:
     PROMPT = '> '
     MSG_TYPE_RE = re.compile(b'^(@[A-Za-z0-9]+)\s+')
     CMD_RE = re.compile(b'^([A-Za-z0-9_]+)\s*')
+    PLAYLIST_FETCH_LIMIT = 1001
 
     def __init__(self, binary=None, api=None, loop=None):
         if binary is None:
@@ -69,6 +70,8 @@ class Mpg123:
             b'br': self._cmd_bitrate,
             b'progress': self._cmd_progress,
             b'pr': self._cmd_progress,
+            b'myplaylists': self._cmd_myplaylists,
+            b'my': self._cmd_myplaylists,
         }
 
     def aprint(self, *args, **kwargs):
@@ -541,3 +544,36 @@ class Mpg123:
                         minutes_total, seconds_total))
         else:
             self.aprint('Not playing')
+
+    async def _cmd_myplaylists(self, cmd):
+        self.aprint('Fetching playlist(s)...')
+        offset = 0
+        more = True
+        pl_list = []
+        while more:
+            r = await self.loop.run_in_executor(
+                    None, self.api.user_playlist.__call__,
+                    offset, self.PLAYLIST_FETCH_LIMIT, 30937443)
+            if r['code'] != 200:
+                self.aprint('Error: api: {}'.format(r))
+                self.aprint('Error: Failed to fetch playlist(s)')
+                return
+            pl_list.extend(r['playlist'])
+            # The API doesn't seem to count the special playlist in 'offset',
+            # so exclude it. I don't know whether this is a bug on the server
+            # side...
+            new_offset = offset + len([pl for pl in pl_list if pl['specialType'] != 5])
+            if offset == new_offset:
+                offset += 1
+            else:
+                offset = new_offset
+            more = r['more']
+
+        if len(pl_list) == 0:
+            self.aprint('No playlist found')
+            return
+
+        for p in pl_list:
+            self.aprint(
+                    '{:10}. {} ({})'
+                    .format(p['id'], p['name'], p['trackCount']))
