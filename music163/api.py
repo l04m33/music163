@@ -136,6 +136,12 @@ class Music163API:
         data=['offset', 'limit', 'uid'],
     )
 
+    playlist_manipulate_tracks = APIFunc(
+        '/weapi/playlist/manipulate/tracks',
+        encrypted=True,
+        data=['op', 'pid', 'trackIds'],
+    )
+
     ENC_RSA_KEY = RSA.construct((
         int(b'00e0b509f6259df8642dbc3566290147' +
             b'7df22677ec152b5ff68ace615bb7b725' +

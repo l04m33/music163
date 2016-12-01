@@ -56,17 +56,16 @@ def cmd_play_song(api, argv):
     song_ids = []
     for i in range(len(argv)):
         try:
-            str_i = str(int(argv[0]))
+            sid = int(argv[0])
             argv.pop(0)
         except ValueError:
             break
-        song_ids.append(str_i)
+        song_ids.append(sid)
 
-    song_ids_str = '[{}]'.format(','.join(song_ids))
-    r = api.song_detail(song_ids_str)
+    r = api.song_detail(song_ids)
     if r['code'] != 200:
         print(r, file=sys.stderr)
-        raise FailedCmdError('play song {}'.format(song_ids_str))
+        raise FailedCmdError('play song {}'.format(song_ids))
 
     _cmd_generate_playlist(argv, api, r['songs'])
 
@@ -98,10 +97,9 @@ def cmd_play_page(api, argv):
         m = song_pattern.match(href)
         if m is None:
             continue
-        song_ids.append(m.group(1))
+        song_ids.append(int(m.group(1)))
 
-    song_ids_str = '[{}]'.format(','.join(song_ids))
-    r = api.song_detail(song_ids_str)
+    r = api.song_detail(song_ids)
     if r['code'] != 200:
         print(r, file=sys.stderr)
         raise FailedCmdError('play page {}'.format(page_url))

@@ -72,6 +72,7 @@ class Mpg123:
             b'pr': self._cmd_progress,
             b'myplaylists': self._cmd_myplaylists,
             b'my': self._cmd_myplaylists,
+            b'fav': self._cmd_fav,
         }
 
     def aprint(self, *args, **kwargs):
@@ -238,7 +239,7 @@ class Mpg123:
 
         r = await self.loop.run_in_executor(
                 None, self.api.song_enhance_player_url.__call__,
-                '[{}]'.format(song['id']), self.default_bitrate)
+                [song['id']], self.default_bitrate)
         if r['code'] != 200:
             self.aprint('Error: api: {}'.format(r))
             self.aprint('Error: Failed to fetch stream URL')
@@ -331,7 +332,7 @@ class Mpg123:
             song_ids = []
             try:
                 for sid in args[2:]:
-                    song_ids.append(str(int(sid)))
+                    song_ids.append(int(sid))
             except ValueError:
                 self.aprint(
                         'Error: Invalid song: {}'
@@ -339,9 +340,8 @@ class Mpg123:
                 return
 
             self.aprint('Fetching song info...')
-            song_ids_str = '[{}]'.format(','.join(song_ids))
             r = await self.loop.run_in_executor(
-                    None, self.api.song_detail.__call__, song_ids_str)
+                    None, self.api.song_detail.__call__, song_ids)
             if r['code'] != 200:
                 self.aprint('Error: api: {}'.format(r))
                 self.aprint('Error: Failed to fetch song(s)')
@@ -388,12 +388,11 @@ class Mpg123:
                 m = song_pattern.match(href)
                 if m is None:
                     continue
-                song_ids.append(str(int(m.group(1))))
+                song_ids.append(int(m.group(1)))
 
-            song_ids_str = '[{}]'.format(','.join(song_ids))
             self.aprint('Fetching song info...')
             r = await self.loop.run_in_executor(
-                    None, self.api.song_detail.__call__, song_ids_str)
+                    None, self.api.song_detail.__call__, song_ids)
             if r['code'] != 200:
                 self.aprint('Error: api: {}'.format(r))
                 self.aprint('Error: Failed to fetch song(s)')
@@ -545,7 +544,7 @@ class Mpg123:
         else:
             self.aprint('Not playing')
 
-    async def _cmd_myplaylists(self, cmd):
+    async def fetch_playlists(self, user_id):
         self.aprint('Fetching playlist(s)...')
         offset = 0
         more = True
@@ -553,11 +552,11 @@ class Mpg123:
         while more:
             r = await self.loop.run_in_executor(
                     None, self.api.user_playlist.__call__,
-                    offset, self.PLAYLIST_FETCH_LIMIT, 30937443)
+                    offset, self.PLAYLIST_FETCH_LIMIT, user_id)
             if r['code'] != 200:
                 self.aprint('Error: api: {}'.format(r))
                 self.aprint('Error: Failed to fetch playlist(s)')
-                return
+                return pl_list
             pl_list.extend(r['playlist'])
             # The API doesn't seem to count the special playlist in 'offset',
             # so exclude it. I don't know whether this is a bug on the server
@@ -571,9 +570,105 @@ class Mpg123:
 
         if len(pl_list) == 0:
             self.aprint('No playlist found')
-            return
+
+        return pl_list
+
+    async def _cmd_myplaylists(self, cmd):
+        pl_list = await self.fetch_playlists(30937443)
 
         for p in pl_list:
             self.aprint(
                     '{:10}. {} ({})'
                     .format(p['id'], p['name'], p['trackCount']))
+
+    async def _cmd_fav(self, cmd):
+        args = [a for a in cmd.split(b' ') if len(a) > 0]
+        fav_type = b'song'
+        if len(args) >= 2:
+            fav_type = args[1]
+
+        if fav_type == b'song':
+            if len(args) >= 3:
+                song_spec = args[2]
+                m = re.match(b'^#([0-9]+)$', song_spec)
+                if m is not None:
+                    song_pl_idx = int(m.group(1))
+                    try:
+                        song = self.playlist[self.current_song]
+                    except IndexError:
+                        if not self.playlist:
+                            self.aprint('Error: Playlist is empty')
+                        else:
+                            self.aprint('Error: Playlist index out of range')
+                        return
+                else:
+                    try:
+                        song_id = int(song_spec)
+                    except ValueError:
+                        self.aprint(
+                                'Error: Invalid song: {}'.format(song_spec))
+                        return
+                    self.aprint('Fetching song info...')
+                    r = await self.loop.run_in_executor(
+                            None, self.api.song_detail.__call__, [song_id])
+                    if r['code'] != 200:
+                        self.aprint('Error: api: {}'.format(r))
+                        self.aprint('Error: Failed to fetch song(s)')
+                        return
+                    if r['songs']:
+                        song = r['songs'][0]
+                    else:
+                        self.aprint('Error: Song {} not found'.format(song_id))
+                        return
+            else:
+                if self.playing_state == 'playing' and \
+                        self.playlist and self.current_song >= 0:
+                    song = self.playlist[self.current_song]
+                else:
+                    self.aprint('Error: Not playing')
+                    return
+
+            if len(args) >= 4:
+                try:
+                    pl_id = int(args[3])
+                except ValueError:
+                    self.aprint(
+                            'Error: Invalid playlist: {}'
+                            .format(args[3].decode()))
+                    return
+                self.aprint('Fetching playlist {}...'.format(pl_id))
+                r = await self.loop.run_in_executor(
+                        None, self.api.playlist_detail.__call__, pl_id)
+                if r['code'] != 200:
+                    self.aprint('Error: api: {}'.format(r))
+                    self.aprint('Error: Failed to fetch playlist {}'.format(pl_id))
+                    return
+                dst_pls = [r['result']]
+            else:
+                my_pl_list = await self.fetch_playlists(30937443)
+                if not my_pl_list:
+                    return
+                dst_pls = [p for p in my_pl_list if p['specialType'] == 5]
+                if not dst_pls:
+                    self.aprint('Error: Default playlist not found')
+                    return
+
+            for p in dst_pls:
+                dst_tracks = [str(song['id'])]
+                self.aprint('Updating playlist {}...'.format(p['id']))
+                r = await self.loop.run_in_executor(
+                        None, self.api.playlist_manipulate_tracks.__call__,
+                        'add', p['id'], [song['id']])
+                if r['code'] != 200:
+                    self.aprint('Error: api: {}'.format(r))
+                    if r['code'] == 502:
+                        self.aprint('Error: Song {} already in playlist {}'.format(song['id'], p['id']))
+                    else:
+                        self.aprint('Error: Failed to update playlist {}'.format(p['id']))
+                    continue
+                self.aprint('Done updating playlist {}'.format(p['id']))
+
+        else:
+            self.aprint(
+                    'Error: Unknown object: {}'
+                    .format(fav_type.decode()))
