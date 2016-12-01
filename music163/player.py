@@ -594,7 +594,7 @@ class Mpg123:
                 if m is not None:
                     song_pl_idx = int(m.group(1))
                     try:
-                        song = self.playlist[self.current_song]
+                        song = self.playlist[song_pl_idx]
                     except IndexError:
                         if not self.playlist:
                             self.aprint('Error: Playlist is empty')
