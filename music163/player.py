@@ -81,11 +81,445 @@ class AsyncLogger:
         self.aprint('Error:', msg)
 
 
-class Mpg123:
-    PROMPT = '> '
-    MSG_TYPE_RE = re.compile(b'^(@[A-Za-z0-9]+)\s+')
-    CMD_RE = re.compile(b'^([A-Za-z0-9_]+)\s*')
+class PlayerCommand:
+    CMD_RE = re.compile('^([A-Za-z0-9_]+)\s*')
     PLAYLIST_FETCH_LIMIT = 1001
+
+    def __init__(self, player, api, logger):
+        self.player = player
+        self.api = api
+        self.logger = logger
+
+    async def call_api(self, api_func, *api_args, notice=None, err_msg=None):
+        if notice is not None:
+            self.logger.info(notice)
+        r = await self.player.loop.run_in_executor(
+                None, api_func.__call__, *api_args)
+        if r['code'] != 200:
+            raise PlayerAPIError(r, err_msg)
+        return r
+
+    async def fetch_playlists(self, user_id):
+        self.logger.info('Fetching playlist(s)...')
+        offset = 0
+        more = True
+        pl_list = []
+        while more:
+            r = await self.call_api(
+                    self.api.user_playlist,
+                    offset, self.PLAYLIST_FETCH_LIMIT, user_id,
+                    err_msg='Failed to fetch playlist(s)')
+            pl_list.extend(r['playlist'])
+            # The API doesn't seem to count the special playlist in 'offset',
+            # so exclude it. I don't know whether this is a bug on the server
+            # side...
+            new_offset = offset + len([pl for pl in pl_list if pl['specialType'] != 5])
+            if offset == new_offset:
+                offset += 1
+            else:
+                offset = new_offset
+            more = r['more']
+
+        if len(pl_list) == 0:
+            self.logger.info('No playlist found')
+
+        return pl_list
+
+    async def call_sub_command(self, sub_name, sub_cmd, *args):
+        try:
+            cr = sub_cmd(*args)
+        except TypeError:
+            raise PlayerCmdError(
+                    'Too many arguments for {}'.format(repr(sub_name)))
+        if asyncio.iscoroutine(cr):
+            await cr
+
+    async def invoke_player_command(self, cmd_factory, *args):
+        cmd = cmd_factory(self.player, self.api, self.logger)
+        cr = cmd.run(*args)
+        if asyncio.iscoroutine(cr):
+            await cr
+
+    @classmethod
+    def parse(cls, cmd_line):
+        cmd_match = cls.CMD_RE.match(cmd_line)
+        if cmd_match is not None:
+            cmd_name = cmd_match.group(1).lower()
+            cmd = None
+            for c in PlayerCommand.__subclasses__():
+                if cmd_name in c.NAMES:
+                    cmd = c
+                    break
+            if cmd is not None:
+                args_str = cmd_line[cmd_match.end():].strip()
+                args = args_str.split()
+                return (cmd, args)
+            else:
+                return None
+        else:
+            return None
+
+
+class CmdPlay(PlayerCommand):
+    NAMES = ['play', 'pl']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sub_commands = {
+            'recommended': self._play_recommended,
+            'rec': self._play_recommended,
+            'playlist': self._play_playlist,
+            'pl': self._play_playlist,
+            'song': self._play_song,
+            'page': self._play_page,
+            'radio': self._play_radio,
+            'program': self._play_program,
+            'prog': self._play_program,
+            'none': self._play_none,
+        }
+
+    async def _play_recommended(self):
+        r = await self.call_api(
+                self.api.discovery_recommend_songs,
+                notice='Fetching recommended playlist...',
+                err_msg='Failed to fetch recommended playlist')
+        self.player.set_playlist(r['recommend'])
+        self.player.reset_current_song()
+        # TODO: Error handling for failed requests
+        asyncio.ensure_future(self.player.play_next_song())
+
+    async def _play_playlist(self, pl_id=None):
+        if pl_id is None:
+            raise PlayerCmdError('Which playlist to play?')
+        try:
+            pl_id = int(pl_id)
+        except ValueError:
+            raise PlayerCmdError('Invalid playlist: {}'.format(pl_id))
+
+        r = await self.call_api(
+                self.api.playlist_detail, pl_id,
+                notice='Fetching playlist {}...'.format(pl_id),
+                err_msg='Failed to fetch playlist {}'.format(pl_id))
+        self.player.set_playlist(r['result']['tracks'])
+        self.player.reset_current_song()
+        asyncio.ensure_future(self.player.play_next_song())
+
+    async def _play_song(self, *song_ids):
+        if len(song_ids) == 0:
+            raise PlayerCmdError('Which song(s) to play?')
+        try:
+            song_ids = [int(sid) for sid in song_ids]
+        except ValueError:
+            raise PlayerCmdError('Invalid song(s): {}'.format(song_ids))
+
+        r = await self.call_api(
+                self.api.song_detail, song_ids,
+                notice='Fetching song info...',
+                err_msg='Failed to fetch song(s)')
+        self.player.set_playlist(r['songs'])
+        self.player.reset_current_song()
+        asyncio.ensure_future(self.player.play_next_song())
+
+    async def _play_page(self, page_url=None):
+        if page_url is None:
+            raise PlayerCmdError('What page?')
+        u = urlparse.urlparse(page_url)
+        if not u.scheme:
+            scheme = MUSIC_163_SCHEME
+        else:
+            scheme = u.scheme
+        if not u.netloc:
+            netloc = MUSIC_163_DOMAIN
+        else:
+            netloc = u.netloc
+
+        page_url = urlparse.urlunparse(
+                (scheme, netloc, u.path, u.params, u.query, u.fragment))
+
+        self.logger.info('Fetching page...')
+        r = await self.player.loop.run_in_executor(
+                None, self.api.session.get, page_url)
+        if r.status_code != 200:
+            raise PlayerAPIError(
+                    '{} {}'.format(r.status_code, r.reason),
+                    'Failed to fetch page')
+        doc = etree.parse(io.StringIO(r.text), etree.HTMLParser())
+
+        song_ids = []
+        song_pattern = re.compile('^.*/song/?\?id\=([0-9]+)$')
+        for a in doc.iter('a'):
+            href = a.attrib.get('href')
+            if not href:
+                continue
+            m = song_pattern.match(href)
+            if m is None:
+                continue
+            song_ids.append(int(m.group(1)))
+
+        r = await self.call_api(
+                self.api.song_detail, song_ids,
+                notice='Fetching song info...',
+                err_msg='Failed to fetch song(s)')
+        self.player.set_playlist(r['songs'])
+        self.player.reset_current_song()
+        asyncio.ensure_future(self.player.play_next_song())
+
+    async def _play_radio(self, n_songs=None):
+        if n_songs is None:
+            n_songs = 0
+        else:
+            try:
+                n_songs = int(n_songs)
+            except ValueError:
+                raise PlayerCmdError('Invalid number: {}'.format(n_songs))
+
+        if n_songs <= 0:
+            r = await self.call_api(
+                    self.api.personal_fm,
+                    notice='Fetching song(s)...',
+                    err_msg='Failed to fetch song(s)')
+            song_list = r['data'][:]
+            song_list.append(None)
+            self.player.set_playlist(song_list)
+            await self.invoke_player_command(CmdShuffle, 'false')
+        else:
+            song_list = []
+            self.logger.info('Fetching song(s)...')
+            while len(song_list) < n_songs:
+                r = await self.call_api(
+                        self.api.personal_fm,
+                        err_msg='Failed to fetch song(s)')
+                song_list.extend(r['data'])
+            self.player.set_playlist(song_list[:n_songs])
+
+        self.player.reset_current_song()
+        asyncio.ensure_future(self.player.play_next_song())
+
+    async def _play_program(self, prog_id=None):
+        if prog_id is None:
+            raise PlayerCmdError('Which program to play?')
+        try:
+            prog_id = int(prog_id)
+        except ValueError:
+            raise PlayerCmdError('Invalid program: {}'.format(prog_id))
+
+        r = await self.call_api(
+                self.api.dj_program_detail, prog_id,
+                notice='Fetching program {}...'.format(prog_id),
+                err_msg='Failed to fetch program: {}'.format(prog_id))
+        self.player.set_playlist([r['program']['mainSong']])
+        self.player.reset_current_song()
+        asyncio.ensure_future(self.player.play_next_song())
+
+    async def _play_none(self):
+        self.player.set_playlist([])
+        self.player.reset_current_song()
+        self.player.invoke_cmd('STOP')
+
+    async def run(self, what=None, *rest):
+        if what is None:
+            raise PlayerCmdError('What to play?')
+        what = what.lower()
+        sub_cmd = self._sub_commands.get(what, None)
+        if callable(sub_cmd):
+            await self.call_sub_command(what, sub_cmd, *rest)
+        elif what.isdigit():
+            idx = int(what)
+            asyncio.ensure_future(self.player.play_song_in_playlist(idx))
+        else:
+            raise PlayerCmdError('Unknown object: {}'.format(what))
+
+
+class CmdList(PlayerCommand):
+    NAMES = ['list', 'ls']
+
+    def run(self):
+        if not self.player.playlist:
+            self.logger.info('Playlist is empty')
+        else:
+            digits = len(str(len(self.player.playlist)))
+            for idx, s in enumerate(self.player.playlist):
+                if s is not None:
+                    display_name = get_song_display_name(s)
+                    self.logger.info(
+                            '{:0{}}. {}'.format(idx, digits, display_name))
+
+
+class CmdShuffle(PlayerCommand):
+    NAMES = ['shuffle']
+
+    def run(self, state=None):
+        if state is None:
+            if self.player.shuffle:
+                self.player.shuffle = False
+            else:
+                if self.player.playlist:
+                    self.player.shuffle_playlist()
+                else:
+                    self.player.shuffle = True
+        else:
+            if state.lower() == 'true' or \
+                    (state.isdigit() and int(state) != 0):
+                if self.player.playlist:
+                    self.player.shuffle_playlist()
+                else:
+                    self.player.shuffle = True
+            elif state.lower() == 'false' or \
+                    (state.isdigit() and int(state) == 0):
+                self.player.shuffle = False
+
+        self.logger.info('Shuffle: {}'.format(bool(self.player.shuffle)))
+
+
+class CmdBitrate(PlayerCommand):
+    NAMES = ['bitrate', 'br']
+
+    def run(self, br=None):
+        if br is None:
+            self.logger.info(
+                    'Default bitrate: {}'.format(self.player.default_bitrate))
+            return
+
+        try:
+            br = int(br)
+        except ValueError:
+            raise PlayerCmdError('Invalid bitrate: {}'.format(br))
+        self.player.set_default_bitrate(br)
+        self.logger.info(
+                'Default bitrate: {}'.format(self.player.default_bitrate))
+
+
+class CmdProgress(PlayerCommand):
+    NAMES = ['progress', 'pr']
+
+    def run(self):
+        if self.player.is_playing():
+            display_name = get_song_display_name(
+                    self.player.playlist[self.player.current_song])
+            total_frames = self.player.frame_info[0] + self.player.frame_info[1]
+            total_seconds = self.player.frame_info[2] + self.player.frame_info[3]
+            percent = int(self.player.frame_info[0] / total_frames * 100)
+            minutes_played = int(self.player.frame_info[2] // 60)
+            seconds_played = int(self.player.frame_info[2] % 60)
+            minutes_total = int(total_seconds // 60)
+            seconds_total = int(total_seconds % 60)
+            self.logger.info(
+                    '{}. {}  {:2}%  {}:{:02} / {}:{:02}'
+                    .format(
+                        self.player.current_song,
+                        display_name, percent,
+                        minutes_played, seconds_played,
+                        minutes_total, seconds_total))
+        else:
+            self.logger.info('Not playing')
+
+
+class CmdUserPlaylists(PlayerCommand):
+    NAMES = ['userplaylists', 'up']
+
+    async def run(self, user_id=None):
+        if user_id is None:
+            # TODO
+            user_id = 30937443
+        else:
+            try:
+                user_id = int(user_id)
+            except ValueError:
+                raise PlayerCmdError('Invalid user: {}'.format(user_id))
+
+        pl_list = await self.fetch_playlists(user_id)
+
+        for p in pl_list:
+            self.logger.info(
+                    '{:10}. {} ({})'
+                    .format(p['id'], p['name'], p['trackCount']))
+
+
+class CmdFav(PlayerCommand):
+    NAMES = ['fav']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sub_commands = {
+            'song': self._fav_song,
+        }
+
+    def _get_song_id(self, song_spec):
+        if song_spec is not None:
+            m = re.match('^#([0-9]+)$', song_spec)
+            if m is not None:
+                song_pl_idx = int(m.group(1))
+                try:
+                    song_id = self.player.playlist[song_pl_idx]['id']
+                except (IndexError, TypeError):
+                    if not self.player.playlist:
+                        msg = 'Playlist is empty'
+                    else:
+                        msg = 'Playlist index out of range'
+                    raise PlayerError(msg)
+            else:
+                if song_spec == '.':
+                    if self.player.is_playing():
+                        cur_song = self.player.current_song
+                        song_id = self.player.playlist[cur_song]['id']
+                    else:
+                        raise PlayerError('Not playing')
+                else:
+                    try:
+                        song_id = int(song_spec)
+                    except ValueError:
+                        raise PlayerCmdError(
+                                'Invalid song: {}'.format(song_spec))
+        else:
+            if self.player.is_playing():
+                cur_song = self.player.current_song
+                song_id = self.player.playlist[cur_song]['id']
+            else:
+                raise PlayerError('Not playing')
+
+        return song_id
+
+    async def _get_playlist_id(self, pl_id):
+        if pl_id is not None:
+            try:
+                pl_id = int(pl_id)
+            except ValueError:
+                raise PlayerCmdError('Invalid playlist: {}'.format(pl_id))
+            dst_pls = [pl_id]
+        else:
+            # TODO
+            my_pl_list = await self.fetch_playlists(30937443)
+            if not my_pl_list:
+                raise PlayerError('Default playlist not found')
+            dst_pls = [p['id'] for p in my_pl_list if p['specialType'] == 5]
+            if not dst_pls:
+                raise PlayerError('Default playlist not found')
+        return dst_pls
+
+    async def _fav_song(self, song_spec=None, pl_id=None):
+        song_id = self._get_song_id(song_spec)
+        dst_pls = await self._get_playlist_id(pl_id)
+        for p in dst_pls:
+            r = await self.call_api(
+                    self.api.playlist_manipulate_tracks,
+                    'add', p, [song_id],
+                    notice='Updating playlist {}...'.format(p),
+                    err_msg='Failed to update playlist {}'.format(p))
+            self.logger.info('Done updating playlist {}'.format(p))
+
+    async def run(self, fav_type=None, *rest):
+        if fav_type is None:
+            fav_type = 'song'
+        fav_type = fav_type.lower()
+        sub_cmd = self._sub_commands.get(fav_type, None)
+        if callable(sub_cmd):
+            await self.call_sub_command(fav_type, sub_cmd, *rest)
+        else:
+            raise PlayerCmdError('Unknown object: {}'.format(fav_type))
+
+
+class Mpg123:
+    MSG_TYPE_RE = re.compile(b'^(@[A-Za-z0-9]+)\s+')
     REQUEST_TIMEOUT = (5, 5)
 
     def __init__(self, binary=None, api=None, loop=None, logger_factory=AsyncLogger):
@@ -110,20 +544,6 @@ class Mpg123:
             b'@S': self._on_ignore, # stream info
             b'@I': self._on_ignore, # (ID3) info
             b'@H': self._on_help,
-        }
-        self.cmd_handlers = {
-            b'play': self._cmd_play,
-            b'pl': self._cmd_play,
-            b'list': self._cmd_list,
-            b'ls': self._cmd_list,
-            b'shuffle': self._cmd_shuffle,
-            b'bitrate': self._cmd_bitrate,
-            b'br': self._cmd_bitrate,
-            b'progress': self._cmd_progress,
-            b'pr': self._cmd_progress,
-            b'myplaylists': self._cmd_myplaylists,
-            b'my': self._cmd_myplaylists,
-            b'fav': self._cmd_fav,
         }
 
     async def start(self):
@@ -163,15 +583,13 @@ class Mpg123:
 
     async def read_cmd(self):
         async for line in self.stdio[0]:
-            cmd_line = line.strip()
-            cmd_match = self.CMD_RE.match(cmd_line)
-            cmd = None
-            if cmd_match is not None:
-                cmd_name = cmd_match.group(1).lower()
-                cmd = self.cmd_handlers.get(cmd_name, None)
-            if callable(cmd):
+            cmd_line = line.decode()
+            res = PlayerCommand.parse(cmd_line)
+            if res is not None:
+                cmd_cls, args = res
+                cmd = cmd_cls(self, self.api, self.logger)
                 try:
-                    cr = cmd(cmd_line)
+                    cr = cmd.run(*args)
                     if asyncio.iscoroutine(cr):
                         await cr
                 except PlayerAPIError as e:
@@ -250,7 +668,11 @@ class Mpg123:
     def _on_ignore(self, msg):
         pass
 
-    async def call_api(self, api_func, *api_args, err_msg=None, notice=None):
+    def is_playing(self):
+        return self.playing_state == 'playing' and \
+                len(self.playlist) > 0 and self.current_song >= 0
+
+    async def call_api(self, api_func, *api_args, notice=None, err_msg=None):
         if notice is not None:
             self.logger.info(notice)
         r = await self.loop.run_in_executor(None, api_func.__call__, *api_args)
@@ -283,7 +705,7 @@ class Mpg123:
             raise PlayerError('Null stream URL')
         self.invoke_cmd('LOAD {}'.format(r['data'][0]['url']))
 
-    def _shuffle_playlist(self):
+    def shuffle_playlist(self):
         self.shuffle = list(range(len(self.playlist)))
         random.shuffle(self.shuffle)
 
@@ -292,7 +714,7 @@ class Mpg123:
         if playlist_len > 0:
             if self.shuffle:
                 if isinstance(self.shuffle, bool):
-                    self._shuffle_playlist()
+                    self.shuffle_playlist()
                 if self.current_song >= 0:
                     current_idx = self.shuffle.index(self.current_song)
                 else:
@@ -315,324 +737,8 @@ class Mpg123:
         self.playlist = playlist
         self.shuffle = bool(self.shuffle)
 
-    async def _cmd_play(self, cmd):
-        args = [a for a in cmd.split(b' ') if len(a) > 0]
-        if len(args) < 2:
-            raise PlayerCmdError('What to play?')
-
-        what = args[1].lower()
-
-        if what == b'recommended' or \
-                what == b'rec':
-            r = await self.call_api(
-                    self.api.discovery_recommend_songs,
-                    notice='Fetching recommended playlist...',
-                    err_msg='Failed to fetch recommended playlist')
-            self.set_playlist(r['recommend'])
-            self.current_song = -1
-            asyncio.ensure_future(self.play_next_song())
-
-        elif what == b'playlist':
-            if len(args) < 3:
-                raise PlayerCmdError('Which playlist to play?')
-            try:
-                pl_id = int(args[2])
-            except ValueError:
-                raise PlayerCmdError(
-                        'Invalid playlist: {}'.format(args[2].decode()))
-
-            r = await self.call_api(
-                    self.api.playlist_detail, pl_id,
-                    notice='Fetching playlist {}...'.format(pl_id),
-                    err_msg='Failed to fetch playlist {}'.format(pl_id))
-            self.set_playlist(r['result']['tracks'])
-            self.current_song = -1
-            asyncio.ensure_future(self.play_next_song())
-
-        elif what == b'song':
-            if len(args) < 3:
-                raise PlayerCmdError('Which song(s) to play?')
-            song_ids = []
-            try:
-                for sid in args[2:]:
-                    song_ids.append(int(sid))
-            except ValueError:
-                raise PlayerCmdError('Invalid song: {}'.format(sid.decode()))
-
-            r = await self.call_api(
-                    self.api.song_detail, song_ids,
-                    notice='Fetching song info...',
-                    err_msg='Failed to fetch song(s)')
-            self.set_playlist(r['songs'])
-            self.current_song = -1
-            asyncio.ensure_future(self.play_next_song())
-
-        elif what == b'page':
-            if len(args) < 3:
-                raise PlayerCmdError('What page?')
-            page_url = args[2].decode()
-            u = urlparse.urlparse(page_url)
-            if not u.scheme:
-                scheme = MUSIC_163_SCHEME
-            else:
-                scheme = u.scheme
-            if not u.netloc:
-                netloc = MUSIC_163_DOMAIN
-            else:
-                netloc = u.netloc
-
-            page_url = urlparse.urlunparse((
-                scheme, netloc, u.path, u.params, u.query, u.fragment))
-
-            self.logger.info('Fetching page...')
-            r = await self.loop.run_in_executor(
-                    None, self.api.session.get, page_url)
-            if r.status_code != 200:
-                raise PlayerAPIError(
-                        '{} {}'.format(r.status_code, r.reason),
-                        'Failed to fetch page')
-            doc = etree.parse(io.StringIO(r.text), etree.HTMLParser())
-
-            song_ids = []
-            song_pattern = re.compile('^.*/song/?\?id\=([0-9]+)$')
-            for a in doc.iter('a'):
-                href = a.attrib.get('href')
-                if not href:
-                    continue
-                m = song_pattern.match(href)
-                if m is None:
-                    continue
-                song_ids.append(int(m.group(1)))
-
-            r = await self.call_api(
-                    self.api.song_detail, song_ids,
-                    notice='Fetching song info...',
-                    err_msg='Failed to fetch song(s)')
-            self.set_playlist(r['songs'])
-            self.current_song = -1
-            asyncio.ensure_future(self.play_next_song())
-
-        elif what == b'radio':
-            if len(args) < 3:
-                n_songs = 0
-            else:
-                try:
-                    n_songs = int(args[2])
-                except ValueError:
-                    raise PlayerCmdError('Invalid number: {}'.format(args[2]))
-
-            if n_songs <= 0:
-                r = await self.call_api(
-                        self.api.personal_fm,
-                        notice='Fetching song(s)...',
-                        err_msg='Failed to fetch song(s)')
-                song_list = r['data'][:]
-                song_list.append(None)
-                self.set_playlist(song_list)
-                self._cmd_shuffle(b'shuffle false')
-            else:
-                song_list = []
-                while len(song_list) < n_songs:
-                    r = await self.call_api(
-                            self.api.personal_fm,
-                            notice='Fetching song(s)...',
-                            err_msg='Failed to fetch song(s)')
-                    song_list.extend(r['data'])
-                self.set_playlist(song_list[:n_songs])
-            self.current_song = -1
-            asyncio.ensure_future(self.play_next_song())
-
-        elif what == b'program':
-            if len(args) < 3:
-                raise PlayerCmdError('Which program to play?')
-            try:
-                prog_id = int(args[2])
-            except ValueError:
-                raise PlayerCmdError(
-                        'Invalid program: {}'.format(args[2].decode()))
-
-            r = await self.call_api(
-                    self.api.dj_program_detail,
-                    notice='Fetching program {}...'.format(prog_id),
-                    err_msg='Failed to fetch program: {}'.format(prog_id))
-            self.set_playlist([r['program']['mainSong']])
-            self.current_song = -1
-            asyncio.ensure_future(self.play_next_song())
-
-        elif what == b'none':
-            self.set_playlist([])
-            self.current_song = -1
-            self.invoke_cmd('STOP')
-
-        elif what.isdigit():
-            idx = int(what)
-            asyncio.ensure_future(self.play_song_in_playlist(idx))
-
-        else:
-            raise PlayerCmdError('Unknown object: {}'.format(what.decode()))
-
-    def _cmd_list(self, cmd):
-        if not self.playlist:
-            self.logger.info('Playlist is empty')
-        else:
-            digits = len(str(len(self.playlist)))
-            for idx, s in enumerate(self.playlist):
-                if s is not None:
-                    display_name = get_song_display_name(s)
-                    self.logger.info('{:0{}}. {}'.format(idx, digits, display_name))
-
-    def _cmd_shuffle(self, cmd):
-        args = [a for a in cmd.split(b' ') if len(a) > 0]
-        if len(args) == 1:
-            if self.shuffle:
-                self.shuffle = False
-            else:
-                if self.playlist:
-                    self._shuffle_playlist()
-                else:
-                    self.shuffle = True
-        elif len(args) > 1:
-            if args[1].lower() == 'true' or \
-                    (args[1].isdigit() and int(args[1]) != 0):
-                if self.playlist:
-                    self._shuffle_playlist()
-                else:
-                    self.shuffle = True
-            elif args[1].lower() == 'false' or \
-                    (args[1].isdigit() and int(args[1]) == 0):
-                self.shuffle = False
-        self.logger.info('Shuffle: {}'.format(bool(self.shuffle)))
-
-    def _cmd_bitrate(self, cmd):
-        args = [a for a in cmd.split(b' ') if len(a) > 0]
-        if len(args) < 2:
-            self.logger.info('Default bitrate: {}'.format(self.default_bitrate))
-            return
-        try:
-            br = int(args[1])
-        except ValueError:
-            raise PlayerCmdError('Invalid bitrate: {}'.format(args[1].decode()))
+    def set_default_bitrate(self, br):
         self.default_bitrate = br
-        self.logger.info('Default bitrate: {}'.format(self.default_bitrate))
 
-    def _cmd_progress(self, cmd):
-        if self.playing_state == 'playing' and \
-                self.playlist and self.current_song >= 0:
-            display_name = get_song_display_name(
-                    self.playlist[self.current_song])
-            total_frames = self.frame_info[0] + self.frame_info[1]
-            total_seconds = self.frame_info[2] + self.frame_info[3]
-            percent = int(self.frame_info[0] / total_frames * 100)
-            minutes_played = int(self.frame_info[2] // 60)
-            seconds_played = int(self.frame_info[2] % 60)
-            minutes_total = int(total_seconds // 60)
-            seconds_total = int(total_seconds % 60)
-            self.logger.info(
-                    '{}. {}  {:2}%  {}:{:02} / {}:{:02}'
-                    .format(self.current_song, display_name,
-                        percent,
-                        minutes_played, seconds_played,
-                        minutes_total, seconds_total))
-        else:
-            self.logger.info('Not playing')
-
-    async def fetch_playlists(self, user_id):
-        self.logger.info('Fetching playlist(s)...')
-        offset = 0
-        more = True
-        pl_list = []
-        while more:
-            r = await self.call_api(
-                    self.api.user_playlist,
-                    offset, self.PLAYLIST_FETCH_LIMIT, user_id,
-                    err_msg='Failed to fetch playlist(s)')
-            pl_list.extend(r['playlist'])
-            # The API doesn't seem to count the special playlist in 'offset',
-            # so exclude it. I don't know whether this is a bug on the server
-            # side...
-            new_offset = offset + len([pl for pl in pl_list if pl['specialType'] != 5])
-            if offset == new_offset:
-                offset += 1
-            else:
-                offset = new_offset
-            more = r['more']
-
-        if len(pl_list) == 0:
-            self.logger.info('No playlist found')
-
-        return pl_list
-
-    async def _cmd_myplaylists(self, cmd):
-        pl_list = await self.fetch_playlists(30937443)
-
-        for p in pl_list:
-            self.logger.info(
-                    '{:10}. {} ({})'
-                    .format(p['id'], p['name'], p['trackCount']))
-
-    async def _cmd_fav(self, cmd):
-        args = [a for a in cmd.split(b' ') if len(a) > 0]
-        fav_type = b'song'
-        if len(args) >= 2:
-            fav_type = args[1]
-
-        if fav_type == b'song':
-            if len(args) >= 3:
-                song_spec = args[2]
-                m = re.match(b'^#([0-9]+)$', song_spec)
-                if m is not None:
-                    song_pl_idx = int(m.group(1))
-                    try:
-                        song = self.playlist[song_pl_idx]
-                    except IndexError:
-                        if not self.playlist:
-                            msg = 'Playlist is empty'
-                        else:
-                            msg = 'Playlist index out of range'
-                        raise PlayerError(msg)
-                else:
-                    if song_spec == b'.':
-                        if self.playing_state == 'playing' and \
-                                self.playlist and self.current_song >= 0:
-                            song_id = self.playlist[self.current_song]['id']
-                        else:
-                            raise PlayerError('Not playing')
-                    else:
-                        try:
-                            song_id = int(song_spec)
-                        except ValueError:
-                            raise PlayerCmdError(
-                                    'Invalid song: {}'.format(song_spec))
-            else:
-                if self.playing_state == 'playing' and \
-                        self.playlist and self.current_song >= 0:
-                    song_id = self.playlist[self.current_song]['id']
-                else:
-                    raise PlayerError('Not playing')
-
-            if len(args) >= 4:
-                try:
-                    pl_id = int(args[3])
-                except ValueError:
-                    raise PlayerCmdError(
-                            'Invalid playlist: {}'.format(args[3].decode()))
-                dst_pls = [pl_id]
-            else:
-                my_pl_list = await self.fetch_playlists(30937443)
-                if not my_pl_list:
-                    return
-                dst_pls = [p['id'] for p in my_pl_list if p['specialType'] == 5]
-                if not dst_pls:
-                    raise PlayerError('Default playlist not found')
-
-            for p in dst_pls:
-                dst_tracks = [str(song_id)]
-                r = await self.call_api(
-                        self.api.playlist_manipulate_tracks,
-                        'add', p, [song_id],
-                        notice='Updating playlist {}...'.format(p),
-                        err_msg='Failed to update playlist {}'.format(p))
-                self.logger.info('Done updating playlist {}'.format(p))
-
-        else:
-            self.logger.error('Unknown object: {}'.format(fav_type.decode()))
+    def reset_current_song(self):
+        self.current_song = -1
