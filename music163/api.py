@@ -170,6 +170,7 @@ class Music163API:
             session = APISession()
         self.session = session
         self.rand = Random.new()
+        self.request_timeout = None
 
     def gen_enc_key(self):
         return codecs.encode(self.rand.read(8), 'hex')
@@ -209,10 +210,14 @@ class Music163API:
                 return c.value
         return None
 
+    def set_request_timeout(self, timeout):
+        self.request_timeout = timeout
+
     def call_api(self, api_url, params=None):
         if params is None:
             params = {}
-        resp = self.session.get(api_url, params=params)
+        resp = self.session.get(
+                api_url, params=params, timeout=self.request_timeout)
         return resp.json()
 
     def call_encrypted_api(self, api_url, params=None, data=None, csrf=True):
@@ -233,5 +238,7 @@ class Music163API:
         else:
             enc_data = self.encrypt_data(data, enc_key)
 
-        resp = self.session.post(api_url, params=real_params, data=enc_data)
+        resp = self.session.post(
+                api_url, params=real_params,
+                data=enc_data, timeout=self.request_timeout)
         return resp.json()

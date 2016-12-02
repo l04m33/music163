@@ -3,6 +3,7 @@ import os
 import re
 import io
 import random
+import requests
 import asyncio
 from asyncio import (subprocess, streams)
 from concurrent.futures import FIRST_COMPLETED
@@ -34,23 +35,73 @@ def get_song_display_name(song):
     return '{} - {}'.format(song['name'], ', '.join(artist_names))
 
 
+class PlayerAPIError(Exception):
+    pass
+
+
+class PlayerCmdError(Exception):
+    pass
+
+
+class PlayerError(Exception):
+    pass
+
+
+class AsyncLogger:
+    def __init__(self, writer):
+        self.writer = writer
+
+    def print_to_str(self, *args, **kwargs):
+        out = io.StringIO()
+        print(*args, **kwargs, file=out)
+        return out.getvalue()
+
+    def aprint(self, *args, **kwargs):
+        out = io.StringIO()
+        print('--  ', end='', file=out)
+        print(*args, **kwargs, file=out)
+        self.writer.write(out.getvalue().encode())
+
+    async def flush(self):
+        await self.writer.drain()
+
+    def debug(self, *args, **kwargs):
+        msg = self.print_to_str(*args, **kwargs)
+        self.aprint('Debug:', msg)
+
+    def info(self, *args, **kwargs):
+        self.aprint(*args, **kwargs)
+
+    def warning(self, *args, **kwargs):
+        msg = self.print_to_str(*args, **kwargs)
+        self.aprint('Warning:', msg)
+
+    def error(self, *args, **kwargs):
+        msg = self.print_to_str(*args, **kwargs)
+        self.aprint('Error:', msg)
+
+
 class Mpg123:
     PROMPT = '> '
     MSG_TYPE_RE = re.compile(b'^(@[A-Za-z0-9]+)\s+')
     CMD_RE = re.compile(b'^([A-Za-z0-9_]+)\s*')
     PLAYLIST_FETCH_LIMIT = 1001
+    REQUEST_TIMEOUT = (5, 5)
 
-    def __init__(self, binary=None, api=None, loop=None):
+    def __init__(self, binary=None, api=None, loop=None, logger_factory=AsyncLogger):
         if binary is None:
             binary = 'mpg123'
         self.binary = binary
         self.api = api
+        if api is not None:
+            api.set_request_timeout(self.REQUEST_TIMEOUT)
         self.loop = loop or asyncio.get_event_loop()
         self.playlist = []
         self.current_song = -1
         self.shuffle = False
         self.default_bitrate = 320000
         self.playing_state = 'stopped'
+        self.logger_factory = logger_factory
         self.msg_handlers = {
             b'@R': self._on_version_info,
             b'@E': self._on_error,
@@ -75,14 +126,9 @@ class Mpg123:
             b'fav': self._cmd_fav,
         }
 
-    def aprint(self, *args, **kwargs):
-        out = io.StringIO()
-        print('--  ', end='', file=out)
-        print(*args, **kwargs, file=out)
-        self.stdio[1].write(out.getvalue().encode())
-
     async def start(self):
         self.stdio = await async_stdio(loop=self.loop)
+        self.logger = self.logger_factory(self.stdio[1])
         self.process = \
                 await asyncio.create_subprocess_exec(
                         self.binary, '--remote',
@@ -116,9 +162,21 @@ class Mpg123:
                 cmd_name = cmd_match.group(1).lower()
                 cmd = self.cmd_handlers.get(cmd_name, None)
             if callable(cmd):
-                cr = cmd(cmd_line)
-                if asyncio.iscoroutine(cr):
-                    await cr
+                try:
+                    cr = cmd(cmd_line)
+                    if asyncio.iscoroutine(cr):
+                        await cr
+                except PlayerAPIError as e:
+                    api_ret = e.args[0]
+                    err_msg = e.args[1]
+                    self.logger.error('api: {}'.format(api_ret))
+                    if err_msg is not None:
+                        self.logger.error(err_msg)
+                except (PlayerError, PlayerCmdError) as e:
+                    err_msg = e.args[0]
+                    self.logger.error(err_msg)
+                except (requests.Timeout, requests.ConnectTimeout) as e:
+                    self.logger.error('Timed out')
             else:
                 self.process.stdin.write(line)
 
@@ -130,38 +188,6 @@ class Mpg123:
     def invoke_cmd(self, cmd):
         cmd += '\n'
         self.process.stdin.write(cmd.encode())
-
-    def cmd_load(self, filename):
-        self.invoke_cmd('LOAD {}'.format(filename))
-
-    def cmd_loadpaused(self, filename):
-        self.invoke_cmd('LOADPAUSED {}'.format(filename))
-
-    def cmd_pause(self):
-        self.invoke_cmd('PAUSE')
-
-    def cmd_stop(self):
-        self.invoke_cmd('STOP')
-
-    def cmd_jump_frames(self, frames, relative=False):
-        if relative:
-            cmd = 'JUMP {:+}'.format(frames)
-        else:
-            cmd = 'JUMP {}'.format(frames)
-        self.invoke_cmd(cmd)
-
-    def cmd_jump_seconds(self, seconds, relative=False):
-        if relative:
-            cmd = 'JUMP {:+}s'.format(seconds)
-        else:
-            cmd = 'JUMP {}s'.format(seconds)
-        self.invoke_cmd(cmd)
-
-    def cmd_volume(self, percent):
-        self.invoke_cmd('VOLUME {}'.format(percent))
-
-    def cmd_pitch(self, rate):
-        self.invoke_cmd('PITCH {:+}'.format(rate))
 
     def handle_msg(self, msg):
         if msg[2] == ord(' '):
@@ -175,37 +201,33 @@ class Mpg123:
 
         handler = self.msg_handlers.get(msg_type, None)
         if handler is None:
-            self.aprint(
-                    'Warning: No handler for message {}'
-                    .format(msg))
+            self.logger.warning('No handler for message {}'.format(msg))
             return
         handler(msg)
 
     def _on_version_info(self, msg):
         self.version = msg[3:]
-        self.aprint(
-                'Using player version: {}'
-                .format(msg[3:].decode()))
+        self.logger.info('Using player version: {}'.format(msg[3:].decode()))
 
     def _on_error(self, msg):
-        self.aprint('Error: mpg123: {}'.format(msg[3:].decode()))
+        self.logger.error('mpg123: {}'.format(msg[3:].decode()))
 
     def _on_play(self, msg):
         stat_str = msg[3:]
         stat = int(stat_str)
         if stat == 2:
-            self.aprint('Playing')
+            self.logger.info('Playing')
             self.playing_state = 'playing'
         elif stat == 1:
-            self.aprint('Paused')
+            self.logger.info('Paused')
             self.playing_state = 'paused'
         elif stat == 0:
-            self.aprint('Stopped')
+            self.logger.info('Stopped')
             self.playing_state = 'stopped'
             if self.playlist:
                 asyncio.ensure_future(self.play_next_song())
         else:
-            self.aprint('Warning: Unknown state: {}'.format(stat))
+            self.logger.warning('Unknown state: {}'.format(stat))
 
     def _on_frame(self, msg):
         frame_info = msg[3:].split(b' ')
@@ -215,39 +237,43 @@ class Mpg123:
 
     def _on_help(self, msg):
         if msg[3] != ord('{') and msg[3] != ord('}'):
-            self.aprint(msg[3:].decode())
+            self.logger.info(msg[3:].decode())
 
     def _on_ignore(self, msg):
         pass
+
+    async def call_api(self, api_func, *api_args, err_msg=None, notice=None):
+        if notice is not None:
+            self.logger.info(notice)
+        r = await self.loop.run_in_executor(None, api_func.__call__, *api_args)
+        if r['code'] != 200:
+            raise PlayerAPIError(r, err_msg)
+        return r
 
     async def play_song_in_playlist(self, idx):
         if idx >= 0 and idx < len(self.playlist):
             self.current_song = idx
         else:
             if not self.playlist:
-                self.aprint('Error: Playlist is empty')
+                msg = 'Playlist is empty'
             else:
-                self.aprint('Error: Playlist index out of range')
-            return
+                msg = 'Playlist index out of range'
+            raise PlayerError(msg)
 
         song = self.playlist[idx]
         display_name = get_song_display_name(song)
-        self.aprint()
-        self.aprint('--=<  {}. {}  >=--'.format(idx, display_name))
-        self.aprint()
-        self.aprint('Fetching stream URL...')
+        self.logger.info('')
+        self.logger.info('--=<  {}. {}  >=--'.format(idx, display_name))
+        self.logger.info('')
 
-        r = await self.loop.run_in_executor(
-                None, self.api.song_enhance_player_url.__call__,
-                [song['id']], self.default_bitrate)
-        if r['code'] != 200:
-            self.aprint('Error: api: {}'.format(r))
-            self.aprint('Error: Failed to fetch stream URL')
-            return
+        r = await self.call_api(
+                self.api.song_enhance_player_url,
+                [song['id']], self.default_bitrate,
+                notice='Fetching stream URL...',
+                err_msg='Failed to fetch stream URL')
         if len(r['data']) == 0 or r['data'][0]['url'] is None:
-            self.aprint('Error: Null stream URL')
-            return
-        self.cmd_load(r['data'][0]['url'])
+            raise PlayerError('Null stream URL')
+        self.invoke_cmd('LOAD {}'.format(r['data'][0]['url']))
 
     def _shuffle_playlist(self):
         self.shuffle = list(range(len(self.playlist)))
@@ -275,7 +301,7 @@ class Mpg123:
 
         else:
             self.current_song = -1
-            self.aprint('Error: Playlist is empty')
+            raise PlayerError('Playlist is empty')
 
     def set_playlist(self, playlist):
         self.playlist = playlist
@@ -284,76 +310,58 @@ class Mpg123:
     async def _cmd_play(self, cmd):
         args = [a for a in cmd.split(b' ') if len(a) > 0]
         if len(args) < 2:
-            self.aprint('Error: What to play?')
-            return
+            raise PlayerCmdError('What to play?')
 
         what = args[1].lower()
 
         if what == b'recommended' or \
                 what == b'rec':
-            self.aprint('Fetching recommended playlist...')
-            r = await self.loop.run_in_executor(
-                    None, self.api.discovery_recommend_songs.__call__)
-            if r['code'] != 200:
-                self.aprint('Error: api: {}'.format(r))
-                self.aprint('Error: Failed to fetch recommended playlist')
-                return
+            r = await self.call_api(
+                    self.api.discovery_recommend_songs,
+                    notice='Fetching recommended playlist...',
+                    err_msg='Failed to fetch recommended playlist')
             self.set_playlist(r['recommend'])
             self.current_song = -1
             asyncio.ensure_future(self.play_next_song())
 
         elif what == b'playlist':
             if len(args) < 3:
-                self.aprint('Error: Which playlist to play?')
-                return
+                raise PlayerCmdError('Which playlist to play?')
             try:
                 pl_id = int(args[2])
             except ValueError:
-                self.aprint(
-                        'Error: Invalid playlist: {}'
-                        .format(args[2].decode()))
-                return
+                raise PlayerCmdError(
+                        'Invalid playlist: {}'.format(args[2].decode()))
 
-            self.aprint('Fetching playlist {}...'.format(pl_id))
-            r = await self.loop.run_in_executor(
-                    None, self.api.playlist_detail.__call__, pl_id)
-            if r['code'] != 200:
-                self.aprint('Error: api: {}'.format(r))
-                self.aprint('Error: Failed to fetch playlist {}'.format(pl_id))
-                return
+            r = await self.call_api(
+                    self.api.playlist_detail, pl_id,
+                    notice='Fetching playlist {}...'.format(pl_id),
+                    err_msg='Failed to fetch playlist {}'.format(pl_id))
             self.set_playlist(r['result']['tracks'])
             self.current_song = -1
             asyncio.ensure_future(self.play_next_song())
 
         elif what == b'song':
             if len(args) < 3:
-                self.aprint('Error: Which song(s) to play?')
-                return
+                raise PlayerCmdError('Which song(s) to play?')
             song_ids = []
             try:
                 for sid in args[2:]:
                     song_ids.append(int(sid))
             except ValueError:
-                self.aprint(
-                        'Error: Invalid song: {}'
-                        .format(sid.decode()))
-                return
+                raise PlayerCmdError('Invalid song: {}'.format(sid.decode()))
 
-            self.aprint('Fetching song info...')
-            r = await self.loop.run_in_executor(
-                    None, self.api.song_detail.__call__, song_ids)
-            if r['code'] != 200:
-                self.aprint('Error: api: {}'.format(r))
-                self.aprint('Error: Failed to fetch song(s)')
-                return
+            r = await self.call_api(
+                    self.api.song_detail, song_ids,
+                    notice='Fetching song info...',
+                    err_msg='Failed to fetch song(s)')
             self.set_playlist(r['songs'])
             self.current_song = -1
             asyncio.ensure_future(self.play_next_song())
 
         elif what == b'page':
             if len(args) < 3:
-                self.aprint('Error: What page?')
-                return
+                raise PlayerCmdError('What page?')
             page_url = args[2].decode()
             u = urlparse.urlparse(page_url)
             if not u.scheme:
@@ -368,15 +376,13 @@ class Mpg123:
             page_url = urlparse.urlunparse((
                 scheme, netloc, u.path, u.params, u.query, u.fragment))
 
-            self.aprint('Fetching page...')
+            self.logger.info('Fetching page...')
             r = await self.loop.run_in_executor(
                     None, self.api.session.get, page_url)
             if r.status_code != 200:
-                self.aprint(
-                        'Error: api: {} {}'
-                        .format(r.status_code, r.reason))
-                self.aprint('Error: Failed to fetch page')
-                return
+                raise PlayerAPIError(
+                        '{} {}'.format(r.status_code, r.reason),
+                        'Failed to fetch page')
             doc = etree.parse(io.StringIO(r.text), etree.HTMLParser())
 
             song_ids = []
@@ -390,13 +396,10 @@ class Mpg123:
                     continue
                 song_ids.append(int(m.group(1)))
 
-            self.aprint('Fetching song info...')
-            r = await self.loop.run_in_executor(
-                    None, self.api.song_detail.__call__, song_ids)
-            if r['code'] != 200:
-                self.aprint('Error: api: {}'.format(r))
-                self.aprint('Error: Failed to fetch song(s)')
-                return
+            r = await self.call_api(
+                    self.api.song_detail, song_ids,
+                    notice='Fetching song info...',
+                    err_msg='Failed to fetch song(s)')
             self.set_playlist(r['songs'])
             self.current_song = -1
             asyncio.ensure_future(self.play_next_song())
@@ -408,17 +411,13 @@ class Mpg123:
                 try:
                     n_songs = int(args[2])
                 except ValueError:
-                    self.aprint('Error: Invalid number: {}'.format(args[2]))
-                    return
+                    raise PlayerCmdError('Invalid number: {}'.format(args[2]))
 
-            self.aprint('Fetching song(s)...')
             if n_songs <= 0:
-                r = await self.loop.run_in_executor(
-                        None, self.api.personal_fm.__call__)
-                if r['code'] != 200:
-                    self.aprint('Error: api: {}'.format(r))
-                    self.aprint('Error: Failed to fetch song(s)')
-                    return
+                r = await self.call_api(
+                        self.api.personal_fm,
+                        notice='Fetching song(s)...',
+                        err_msg='Failed to fetch song(s)')
                 song_list = r['data'][:]
                 song_list.append(None)
                 self.set_playlist(song_list)
@@ -426,12 +425,10 @@ class Mpg123:
             else:
                 song_list = []
                 while len(song_list) < n_songs:
-                    r = await self.loop.run_in_executor(
-                            None, self.api.personal_fm.__call__)
-                    if r['code'] != 200:
-                        self.aprint('Error: api: {}'.format(r))
-                        self.aprint('Error: Failed to fetch song(s)')
-                        return
+                    r = await self.call_api(
+                            self.api.personal_fm,
+                            notice='Fetching song(s)...',
+                            err_msg='Failed to fetch song(s)')
                     song_list.extend(r['data'])
                 self.set_playlist(song_list[:n_songs])
             self.current_song = -1
@@ -439,25 +436,17 @@ class Mpg123:
 
         elif what == b'program':
             if len(args) < 3:
-                self.aprint('Error: Which program to play?')
-                return
+                raise PlayerCmdError('Which program to play?')
             try:
                 prog_id = int(args[2])
             except ValueError:
-                self.aprint(
-                        'Error: Invalid program: {}'
-                        .format(args[2].decode()))
-                return
+                raise PlayerCmdError(
+                        'Invalid program: {}'.format(args[2].decode()))
 
-            self.aprint('Fetching program {}...'.format(prog_id))
-            r = await self.loop.run_in_executor(
-                    None, self.api.dj_program_detail.__call__, prog_id)
-            if r['code'] != 200:
-                self.aprint('Error: api: {}'.format(r))
-                self.aprint(
-                        'Error: Failed to fetch program: {}'
-                        .format(prog_id))
-                return
+            r = await self.call_api(
+                    self.api.dj_program_detail,
+                    notice='Fetching program {}...'.format(prog_id),
+                    err_msg='Failed to fetch program: {}'.format(prog_id))
             self.set_playlist([r['program']['mainSong']])
             self.current_song = -1
             asyncio.ensure_future(self.play_next_song())
@@ -465,26 +454,24 @@ class Mpg123:
         elif what == b'none':
             self.set_playlist([])
             self.current_song = -1
-            self.cmd_stop()
+            self.invoke_cmd('STOP')
 
         elif what.isdigit():
             idx = int(what)
             asyncio.ensure_future(self.play_song_in_playlist(idx))
 
         else:
-            self.aprint(
-                    'Error: Unknown object: {}'
-                    .format(what.decode()))
+            raise PlayerCmdError('Unknown object: {}'.format(what.decode()))
 
     def _cmd_list(self, cmd):
         if not self.playlist:
-            self.aprint('Playlist is empty')
+            self.logger.info('Playlist is empty')
         else:
             digits = len(str(len(self.playlist)))
             for idx, s in enumerate(self.playlist):
                 if s is not None:
                     display_name = get_song_display_name(s)
-                    self.aprint('{:0{}}. {}'.format(idx, digits, display_name))
+                    self.logger.info('{:0{}}. {}'.format(idx, digits, display_name))
 
     def _cmd_shuffle(self, cmd):
         args = [a for a in cmd.split(b' ') if len(a) > 0]
@@ -506,22 +493,19 @@ class Mpg123:
             elif args[1].lower() == 'false' or \
                     (args[1].isdigit() and int(args[1]) == 0):
                 self.shuffle = False
-        self.aprint('Shuffle: {}'.format(bool(self.shuffle)))
+        self.logger.info('Shuffle: {}'.format(bool(self.shuffle)))
 
     def _cmd_bitrate(self, cmd):
         args = [a for a in cmd.split(b' ') if len(a) > 0]
         if len(args) < 2:
-            self.aprint('Default bitrate: {}'.format(self.default_bitrate))
+            self.logger.info('Default bitrate: {}'.format(self.default_bitrate))
             return
         try:
             br = int(args[1])
         except ValueError:
-            self.aprint(
-                    'Error: Invalid bitrate: {}'
-                    .format(args[1].decode()))
-            return
+            raise PlayerCmdError('Invalid bitrate: {}'.format(args[1].decode()))
         self.default_bitrate = br
-        self.aprint('Default bitrate: {}'.format(self.default_bitrate))
+        self.logger.info('Default bitrate: {}'.format(self.default_bitrate))
 
     def _cmd_progress(self, cmd):
         if self.playing_state == 'playing' and \
@@ -535,28 +519,25 @@ class Mpg123:
             seconds_played = int(self.frame_info[2] % 60)
             minutes_total = int(total_seconds // 60)
             seconds_total = int(total_seconds % 60)
-            self.aprint(
+            self.logger.info(
                     '{}. {}  {:2}%  {}:{:02} / {}:{:02}'
                     .format(self.current_song, display_name,
                         percent,
                         minutes_played, seconds_played,
                         minutes_total, seconds_total))
         else:
-            self.aprint('Not playing')
+            self.logger.info('Not playing')
 
     async def fetch_playlists(self, user_id):
-        self.aprint('Fetching playlist(s)...')
+        self.logger.info('Fetching playlist(s)...')
         offset = 0
         more = True
         pl_list = []
         while more:
-            r = await self.loop.run_in_executor(
-                    None, self.api.user_playlist.__call__,
-                    offset, self.PLAYLIST_FETCH_LIMIT, user_id)
-            if r['code'] != 200:
-                self.aprint('Error: api: {}'.format(r))
-                self.aprint('Error: Failed to fetch playlist(s)')
-                return pl_list
+            r = await self.call_api(
+                    self.api.user_playlist,
+                    offset, self.PLAYLIST_FETCH_LIMIT, user_id,
+                    err_msg='Failed to fetch playlist(s)')
             pl_list.extend(r['playlist'])
             # The API doesn't seem to count the special playlist in 'offset',
             # so exclude it. I don't know whether this is a bug on the server
@@ -569,7 +550,7 @@ class Mpg123:
             more = r['more']
 
         if len(pl_list) == 0:
-            self.aprint('No playlist found')
+            self.logger.info('No playlist found')
 
         return pl_list
 
@@ -577,7 +558,7 @@ class Mpg123:
         pl_list = await self.fetch_playlists(30937443)
 
         for p in pl_list:
-            self.aprint(
+            self.logger.info(
                     '{:10}. {} ({})'
                     .format(p['id'], p['name'], p['trackCount']))
 
@@ -597,78 +578,53 @@ class Mpg123:
                         song = self.playlist[song_pl_idx]
                     except IndexError:
                         if not self.playlist:
-                            self.aprint('Error: Playlist is empty')
+                            msg = 'Playlist is empty'
                         else:
-                            self.aprint('Error: Playlist index out of range')
-                        return
+                            msg = 'Playlist index out of range'
+                        raise PlayerError(msg)
                 else:
-                    try:
-                        song_id = int(song_spec)
-                    except ValueError:
-                        self.aprint(
-                                'Error: Invalid song: {}'.format(song_spec))
-                        return
-                    self.aprint('Fetching song info...')
-                    r = await self.loop.run_in_executor(
-                            None, self.api.song_detail.__call__, [song_id])
-                    if r['code'] != 200:
-                        self.aprint('Error: api: {}'.format(r))
-                        self.aprint('Error: Failed to fetch song(s)')
-                        return
-                    if r['songs']:
-                        song = r['songs'][0]
+                    if song_spec == b'.':
+                        if self.playing_state == 'playing' and \
+                                self.playlist and self.current_song >= 0:
+                            song_id = self.playlist[self.current_song]['id']
+                        else:
+                            raise PlayerError('Not playing')
                     else:
-                        self.aprint('Error: Song {} not found'.format(song_id))
-                        return
+                        try:
+                            song_id = int(song_spec)
+                        except ValueError:
+                            raise PlayerCmdError(
+                                    'Invalid song: {}'.format(song_spec))
             else:
                 if self.playing_state == 'playing' and \
                         self.playlist and self.current_song >= 0:
-                    song = self.playlist[self.current_song]
+                    song_id = self.playlist[self.current_song]['id']
                 else:
-                    self.aprint('Error: Not playing')
-                    return
+                    raise PlayerError('Not playing')
 
             if len(args) >= 4:
                 try:
                     pl_id = int(args[3])
                 except ValueError:
-                    self.aprint(
-                            'Error: Invalid playlist: {}'
-                            .format(args[3].decode()))
-                    return
-                self.aprint('Fetching playlist {}...'.format(pl_id))
-                r = await self.loop.run_in_executor(
-                        None, self.api.playlist_detail.__call__, pl_id)
-                if r['code'] != 200:
-                    self.aprint('Error: api: {}'.format(r))
-                    self.aprint('Error: Failed to fetch playlist {}'.format(pl_id))
-                    return
-                dst_pls = [r['result']]
+                    raise PlayerCmdError(
+                            'Invalid playlist: {}'.format(args[3].decode()))
+                dst_pls = [pl_id]
             else:
                 my_pl_list = await self.fetch_playlists(30937443)
                 if not my_pl_list:
                     return
-                dst_pls = [p for p in my_pl_list if p['specialType'] == 5]
+                dst_pls = [p['id'] for p in my_pl_list if p['specialType'] == 5]
                 if not dst_pls:
-                    self.aprint('Error: Default playlist not found')
-                    return
+                    raise PlayerError('Default playlist not found')
 
             for p in dst_pls:
-                dst_tracks = [str(song['id'])]
-                self.aprint('Updating playlist {}...'.format(p['id']))
-                r = await self.loop.run_in_executor(
-                        None, self.api.playlist_manipulate_tracks.__call__,
-                        'add', p['id'], [song['id']])
-                if r['code'] != 200:
-                    self.aprint('Error: api: {}'.format(r))
-                    if r['code'] == 502:
-                        self.aprint('Error: Song {} already in playlist {}'.format(song['id'], p['id']))
-                    else:
-                        self.aprint('Error: Failed to update playlist {}'.format(p['id']))
-                    continue
-                self.aprint('Done updating playlist {}'.format(p['id']))
+                dst_tracks = [str(song_id)]
+                r = await self.call_api(
+                        self.api.playlist_manipulate_tracks,
+                        'add', p, [song_id],
+                        notice='Updating playlist {}...'.format(p),
+                        err_msg='Failed to update playlist {}'.format(p))
+                self.logger.info('Done updating playlist {}'.format(p))
 
         else:
-            self.aprint(
-                    'Error: Unknown object: {}'
-                    .format(fav_type.decode()))
+            self.logger.error('Unknown object: {}'.format(fav_type.decode()))
