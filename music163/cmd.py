@@ -138,6 +138,7 @@ def cmd_player(api, argv):
     player = Mpg123(api=api, binary=binary)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(player.run())
+    loop.close()
 
 
 def _cmd_generate_playlist(argv, api, song_list):

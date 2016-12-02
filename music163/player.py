@@ -151,6 +151,14 @@ class Mpg123:
         self.reader_handle.cancel()
         self.dispatcher_handle.cancel()
         self.process.kill()
+        try:
+            await self.reader_handle
+        except asyncio.CancelledError:
+            pass
+        try:
+            await self.dispatcher_handle
+        except asyncio.CancelledError:
+            pass
         await self.process.wait()
 
     async def read_cmd(self):
