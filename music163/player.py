@@ -53,7 +53,7 @@ class AsyncLogger:
 
     def print_to_str(self, *args, **kwargs):
         out = io.StringIO()
-        print(*args, **kwargs, file=out)
+        print(*args, **kwargs, end='', file=out)
         return out.getvalue()
 
     def aprint(self, *args, **kwargs):
