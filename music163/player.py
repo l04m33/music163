@@ -153,7 +153,7 @@ class PlayerCommand:
             if cmd is not None:
                 args_str = cmd_line[cmd_match.end():].strip()
                 args = args_str.split()
-                return (cmd, args)
+                return (cmd, cmd_name, args)
             else:
                 return None
         else:
@@ -316,7 +316,7 @@ class CmdPlay(PlayerCommand):
         self.player.reset_current_song()
         self.player.invoke_cmd('STOP')
 
-    async def run(self, what=None, *rest):
+    async def run(self, _name, what=None, *rest):
         if what is None:
             raise PlayerCmdError('What to play?')
         what = what.lower()
@@ -333,7 +333,7 @@ class CmdPlay(PlayerCommand):
 class CmdList(PlayerCommand):
     NAMES = ['list', 'ls']
 
-    def run(self):
+    def run(self, _name):
         if not self.player.playlist:
             self.logger.info('Playlist is empty')
         else:
@@ -348,7 +348,7 @@ class CmdList(PlayerCommand):
 class CmdShuffle(PlayerCommand):
     NAMES = ['shuffle']
 
-    def run(self, state=None):
+    def run(self, _name, state=None):
         if state is None:
             if self.player.shuffle:
                 self.player.shuffle = False
@@ -374,7 +374,7 @@ class CmdShuffle(PlayerCommand):
 class CmdBitrate(PlayerCommand):
     NAMES = ['bitrate', 'br']
 
-    def run(self, br=None):
+    def run(self, _name, br=None):
         if br is None:
             self.logger.info(
                     'Default bitrate: {}'.format(self.player.default_bitrate))
@@ -392,7 +392,7 @@ class CmdBitrate(PlayerCommand):
 class CmdProgress(PlayerCommand):
     NAMES = ['progress', 'pr']
 
-    def run(self):
+    def run(self, _name):
         if self.player.is_playing():
             display_name = get_song_display_name(
                     self.player.playlist[self.player.current_song])
@@ -417,7 +417,7 @@ class CmdProgress(PlayerCommand):
 class CmdUserPlaylists(PlayerCommand):
     NAMES = ['userplaylists', 'up']
 
-    async def run(self, user_id=None):
+    async def run(self, _name, user_id=None):
         if user_id is None:
             # TODO
             user_id = 30937443
@@ -436,12 +436,13 @@ class CmdUserPlaylists(PlayerCommand):
 
 
 class CmdFav(PlayerCommand):
-    NAMES = ['fav']
+    NAMES = ['fav', 'unfav']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._sub_commands = {
-            'song': self._fav_song,
+            'fav_song': self._fav_song,
+            'unfav_song': self._unfav_song,
         }
 
     def _get_song_id(self, song_spec):
@@ -507,10 +508,22 @@ class CmdFav(PlayerCommand):
                     err_msg='Failed to update playlist {}'.format(p))
             self.logger.info('Done updating playlist {}'.format(p))
 
-    async def run(self, fav_type=None, *rest):
+    async def _unfav_song(self, song_spec=None, pl_id=None):
+        song_id = self._get_song_id(song_spec)
+        dst_pls = await self._get_playlist_id(pl_id)
+        for p in dst_pls:
+            r = await self.call_api(
+                    self.api.playlist_manipulate_tracks,
+                    'del', p, [song_id],
+                    notice='Updating playlist {}...'.format(p),
+                    err_msg='Failed to update playlist {}'.format(p))
+            self.logger.info('Done updating playlist {}'.format(p))
+
+    async def run(self, name, fav_type=None, *rest):
         if fav_type is None:
             fav_type = 'song'
         fav_type = fav_type.lower()
+        fav_type = '_'.join([name, fav_type])
         sub_cmd = self._sub_commands.get(fav_type, None)
         if callable(sub_cmd):
             await self.call_sub_command(fav_type, sub_cmd, *rest)
@@ -586,10 +599,10 @@ class Mpg123:
             cmd_line = line.decode()
             res = PlayerCommand.parse(cmd_line)
             if res is not None:
-                cmd_cls, args = res
+                cmd_cls, cmd_name, args = res
                 cmd = cmd_cls(self, self.api, self.logger)
                 try:
-                    cr = cmd.run(*args)
+                    cr = cmd.run(cmd_name, *args)
                     if asyncio.iscoroutine(cr):
                         await cr
                 except PlayerAPIError as e:
