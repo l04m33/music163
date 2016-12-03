@@ -419,8 +419,7 @@ class CmdUserPlaylists(PlayerCommand):
 
     async def run(self, _name, user_id=None):
         if user_id is None:
-            # TODO
-            user_id = 30937443
+            user_id = self.player.api.profile['userId']
         else:
             try:
                 user_id = int(user_id)
@@ -488,8 +487,8 @@ class CmdFav(PlayerCommand):
                 raise PlayerCmdError('Invalid playlist: {}'.format(pl_id))
             dst_pls = [pl_id]
         else:
-            # TODO
-            my_pl_list = await self.fetch_playlists(30937443)
+            my_id = self.player.api.profile['userId']
+            my_pl_list = await self.fetch_playlists(my_id)
             if not my_pl_list:
                 raise PlayerError('Default playlist not found')
             dst_pls = [p['id'] for p in my_pl_list if p['specialType'] == 5]

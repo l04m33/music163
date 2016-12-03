@@ -30,6 +30,12 @@ def cmd_login(api, argv):
         print(r, file=sys.stderr)
         raise FailedCmdError('login')
     api.session.cookies.save()
+
+    for field in ['userId', 'nickname']:
+        api.profile[field] = r['profile'][field]
+        api.profile[field] = r['profile'][field]
+    api.profile.save()
+
     print('Done.')
 
 

@@ -20,6 +20,20 @@ class APIError(Exception):
     pass
 
 
+class Profile(dict):
+    def set_filename(self, filename):
+        self.filename = filename
+
+    def save(self):
+        with open(self.filename, 'w') as out_file:
+            json.dump(self, out_file)
+
+    def load(self):
+        with open(self.filename, 'r') as in_file:
+            json_obj = json.load(in_file)
+            self.update(json_obj)
+
+
 class APISession(requests.Session):
     def __init__(self):
         super(APISession, self).__init__()
@@ -165,10 +179,13 @@ class Music163API:
                 setattr(obj, a, types.MethodType(attr, obj))
         return obj
 
-    def __init__(self, session=None):
+    def __init__(self, session=None, profile=None):
         if session is None:
             session = APISession()
         self.session = session
+        if profile is None:
+            profile = Profile()
+        self.profile = profile
         self.rand = Random.new()
         self.request_timeout = None
 
