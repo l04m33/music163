@@ -547,6 +547,7 @@ class CmdSearch(PlayerCommand):
     SEARCH_LIMIT_PLAYLIST = 20
     SEARCH_LIMIT_PROGRAM = 20
     SEARCH_LIMIT_USER = 20
+    SEARCH_LIMIT_SUGGEST = 8
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -557,6 +558,7 @@ class CmdSearch(PlayerCommand):
             'playlist': self._search_playlist,
             'program': self._search_program,
             'user': self._search_user,
+            'simple': self._search_suggest,
         }
 
     def _parse_search_args(self, page, terms):
@@ -614,7 +616,7 @@ class CmdSearch(PlayerCommand):
                 err_msg='Failed to fetch search results')
         if r['result']['artistCount'] > 0:
             for a in r['result']['artists']:
-                if a['trans'] is not None:
+                if a['trans']:
                     self.logger.info(
                             '{:10}. {} ({})'
                             .format(a['id'], a['name'], a['trans']))
@@ -734,6 +736,83 @@ class CmdSearch(PlayerCommand):
                         math.ceil(r['result']['userprofileCount'] / self.SEARCH_LIMIT_USER)))
         else:
             self.logger.info('No user(s) found')
+
+    def _format_suggest_artist(self, artist):
+        if artist['trans']:
+            self.logger.info(
+                    '{:10}. {} ({})'
+                    .format(artist['id'], artist['name'], artist['trans']))
+        else:
+            self.logger.info(
+                    '{:10}. {}'
+                    .format(artist['id'], artist['name']))
+
+    def _format_suggest_album(self, album):
+        self.logger.info(
+                '{:10}. {} - {}'
+                .format(album['id'], album['name'], album['artist']['name']))
+
+    def _format_suggest_song(self, song):
+        artist_names = [a['name'] for a in song['artists']]
+        artist_names = ', '.join(artist_names)
+        self.logger.info(
+                '{:10}. {} - {}'
+                .format(song['id'], song['name'], artist_names))
+
+    def _format_suggest_playlist(self, playlist):
+        self.logger.info(
+                '{:10}. {} ({})'
+                .format(
+                    playlist['id'],
+                    playlist['name'],
+                    playlist['trackCount']))
+
+    async def _search_suggest(self, *terms):
+        if len(terms) == 0:
+            raise PlayerCmdError('No search term(s) specified')
+
+        query = ' '.join(terms)
+        r = await self.call_api(
+                self.api.search_suggest_web,
+                query, self.SEARCH_LIMIT_PLAYLIST,
+                notice='Fetching search results...',
+                err_msg='Failed to fetch search results')
+
+        if 'order' in r['result']:
+            no_output = True
+            for r_name in r['result']['order']:
+                items = r['result'][r_name]
+                if r_name == 'songs':
+                    self.logger.info('')
+                    self.logger.info('Songs:')
+                    for song in items:
+                        no_output = False
+                        self._format_suggest_song(song)
+                elif r_name == 'artists':
+                    self.logger.info('')
+                    self.logger.info('Artists:')
+                    for artist in items:
+                        no_output = False
+                        self._format_suggest_artist(artist)
+                elif r_name == 'albums':
+                    self.logger.info('')
+                    self.logger.info('Albums:')
+                    for album in items:
+                        no_output = False
+                        self._format_suggest_album(album)
+                elif r_name == 'playlists':
+                    self.logger.info('')
+                    self.logger.info('Playlists:')
+                    for playlist in items:
+                        no_output = False
+                        self._format_suggest_playlist(playlist)
+                else:
+                    # Ignore other stuff
+                    pass
+            if no_output:
+                self.logger.info('No result')
+        else:
+            self.logger.info('No result')
 
     async def run(self, name, search_type=None, *rest):
         if search_type is None:
