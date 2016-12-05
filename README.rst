@@ -2,7 +2,7 @@
 簡介
 ####
 
-這是一個簡單的（非官方）網易雲音樂命令行客戶端，使用 `mpg123` 作爲後端。
+這是一個簡單的（非官方）網易雲音樂命令行客戶端，使用 `mpg123`_ 作爲後端。
 
 所有加/解密相關代碼都是在 `NetEase-MusicBox`_ 的基礎上修改而來的。
 
@@ -45,7 +45,7 @@
 
 目前只支持使用手機帳號登錄：
 
-.. code-block:: sh
+.. code-block:: text
 
     ❯ music163 login <手機號碼> <密碼>
 
@@ -56,7 +56,7 @@
 
 登錄後使用 ``player`` 命令運行內置播放器：
 
-.. code-block:: sh
+.. code-block:: text
 
     ❯ music163 player
     --  Using player version: MPG123 (ThOr) v8
@@ -169,6 +169,8 @@
 用戶 ID 是一個整數，可以通過 ``search`` 命令取得。省略用戶 ID 時，
 顯示已登錄用戶的歌單。所顯示的歌單格式如下：
 
+.. code-block:: text
+
     -- <歌單 ID>. <歌單名稱> (<曲目數>)
 
 歌單 ID 是歌單的唯一標識，可以用在 ``play``, ``fav`` 等命令中指定
@@ -270,7 +272,7 @@ ID 時默認選擇「我喜歡的音樂」歌單。
 
 除了使用內部播放器，程序還支持導出播放列表用以在外部播放器中播放。例如：
 
-.. code-block:: sh
+.. code-block:: text
 
     ❯ music163 play recommended pls > recommended.pls
     ❯ mplayer -playlist recommended.pls
