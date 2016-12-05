@@ -93,11 +93,6 @@ class APIFunc:
 
 
 class Music163API:
-    PREFERED_SERVERS = [
-        # 'm1.music.126.net',
-        'm2.music.126.net',
-    ]
-
     login = APIFunc(
         '/weapi/login/cellphone',
         encrypted=True,
@@ -154,6 +149,12 @@ class Music163API:
         '/weapi/playlist/manipulate/tracks',
         encrypted=True,
         data=['op', 'pid', 'trackIds'],
+    )
+
+    cloudsearch_get_web = APIFunc(
+        '/weapi/cloudsearch/get/web',
+        encrypted=True,
+        data=['s', 'type', 'limit', 'offset'],
     )
 
     ENC_RSA_KEY = RSA.construct((
@@ -235,7 +236,12 @@ class Music163API:
             params = {}
         resp = self.session.get(
                 api_url, params=params, timeout=self.request_timeout)
-        return resp.json()
+        try:
+            return resp.json()
+        except:
+            raise APIError(
+                    'Failed to decode text as JSON: {}'
+                    .format(resp.text))
 
     def call_encrypted_api(self, api_url, params=None, data=None, csrf=True):
         if csrf:
@@ -258,4 +264,9 @@ class Music163API:
         resp = self.session.post(
                 api_url, params=real_params,
                 data=enc_data, timeout=self.request_timeout)
-        return resp.json()
+        try:
+            return resp.json()
+        except:
+            raise APIError(
+                    'Failed to decode text as JSON: {}'
+                    .format(resp.text))

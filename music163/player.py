@@ -5,6 +5,7 @@ import io
 import random
 import requests
 import asyncio
+import math
 from asyncio import (subprocess, streams)
 from concurrent.futures import FIRST_COMPLETED
 import urllib.parse as urlparse
@@ -528,6 +529,221 @@ class CmdFav(PlayerCommand):
             await self.call_sub_command(fav_type, sub_cmd, *rest)
         else:
             raise PlayerCmdError('Unknown object: {}'.format(fav_type))
+
+
+class CmdSearch(PlayerCommand):
+    NAMES = ['search']
+
+    SEARCH_TYPE_SONG = 1
+    SEARCH_TYPE_ARTIST = 100
+    SEARCH_TYPE_ALBUM = 10
+    SEARCH_TYPE_PLAYLIST = 1000
+    SEARCH_TYPE_PROGRAM = 1009
+    SEARCH_TYPE_USER = 1002
+
+    SEARCH_LIMIT_SONG = 20
+    SEARCH_LIMIT_ARTIST = 20
+    SEARCH_LIMIT_ALBUM = 20
+    SEARCH_LIMIT_PLAYLIST = 20
+    SEARCH_LIMIT_PROGRAM = 20
+    SEARCH_LIMIT_USER = 20
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sub_commands = {
+            'song': self._search_song,
+            'artist': self._search_artist,
+            'album': self._search_album,
+            'playlist': self._search_playlist,
+            'program': self._search_program,
+            'user': self._search_user,
+        }
+
+    def _parse_search_args(self, page, terms):
+        terms = list(terms)
+        if page is not None:
+            if page.isdigit():
+                page = int(page)
+            else:
+                terms.insert(0, page)
+                page = 1
+        else:
+            page = 1
+
+        if page <= 0:
+            raise PlayerCmdError('Invalid page: {}'.format(page))
+
+        if len(terms) == 0:
+            raise PlayerCmdError('No search term(s) specified')
+
+        return (page, ' '.join(terms))
+
+    async def _search_song(self, page=None, *terms):
+        page, query = self._parse_search_args(page, terms)
+
+        offset = (page - 1) * self.SEARCH_LIMIT_SONG
+        r = await self.call_api(
+                self.api.cloudsearch_get_web,
+                query, self.SEARCH_TYPE_SONG, self.SEARCH_LIMIT_SONG, offset,
+                notice='Fetching search results...',
+                err_msg='Failed to fetch search results')
+        if r['result']['songCount'] > 0:
+            for s in r['result']['songs']:
+                artist_names = [a['name'] for a in s['ar']]
+                artist_names = ', '.join(artist_names)
+                self.logger.info(
+                        '{:10}. {} - {} ({})'
+                        .format(s['id'], s['name'],
+                            artist_names, s['al']['name']))
+            self.logger.info(
+                    'Found {} song(s) in total. Page {} / {}.'
+                    .format(r['result']['songCount'], page,
+                        math.ceil(r['result']['songCount'] / self.SEARCH_LIMIT_SONG)))
+        else:
+            self.logger.info('No song(s) found')
+
+    async def _search_artist(self, page=None, *terms):
+        page, query = self._parse_search_args(page, terms)
+
+        offset = (page - 1) * self.SEARCH_LIMIT_ARTIST
+        r = await self.call_api(
+                self.api.cloudsearch_get_web,
+                query, self.SEARCH_TYPE_ARTIST,
+                self.SEARCH_LIMIT_ARTIST, offset,
+                notice='Fetching search results...',
+                err_msg='Failed to fetch search results')
+        if r['result']['artistCount'] > 0:
+            for a in r['result']['artists']:
+                if a['trans'] is not None:
+                    self.logger.info(
+                            '{:10}. {} ({})'
+                            .format(a['id'], a['name'], a['trans']))
+                else:
+                    self.logger.info(
+                            '{:10}. {}'.format(a['id'], a['name']))
+            self.logger.info(
+                    'Found {} artist(s) in total. Page {} / {}.'
+                    .format(r['result']['artistCount'], page,
+                        math.ceil(r['result']['artistCount'] / self.SEARCH_LIMIT_ARTIST)))
+        else:
+            self.logger.info('No artist(s) found')
+
+    async def _search_album(self, page=None, *terms):
+        page, query = self._parse_search_args(page, terms)
+
+        offset = (page - 1) * self.SEARCH_LIMIT_ALBUM
+        r = await self.call_api(
+                self.api.cloudsearch_get_web,
+                query, self.SEARCH_TYPE_ALBUM,
+                self.SEARCH_LIMIT_ALBUM, offset,
+                notice='Fetching search results...',
+                err_msg='Failed to fetch search results')
+        if r['result']['albumCount'] > 0:
+            for a in r['result']['albums']:
+                artist_names = [aa['name'] for aa in a['artists']]
+                artist_names = ', '.join(artist_names)
+                album_types = []
+                if a['type']:
+                    album_types.append(a['type'])
+                if a['subType']:
+                    album_types.append(a['subType'])
+                if len(album_types) > 0:
+                    album_types = ', '.join(album_types)
+                    self.logger.info(
+                            '{:10}. {} - {} ({})'
+                            .format(a['id'], a['name'], artist_names, album_types))
+                else:
+                    self.logger.info(
+                            '{:10}. {} - {}'
+                            .format(a['id'], a['name'], artist_names))
+            self.logger.info(
+                    'Found {} album(s) in total. Page {} / {}.'
+                    .format(r['result']['albumCount'], page,
+                        math.ceil(r['result']['albumCount'] / self.SEARCH_LIMIT_ALBUM)))
+        else:
+            self.logger.info('No album(s) found')
+
+    async def _search_playlist(self, page=None, *terms):
+        page, query = self._parse_search_args(page, terms)
+
+        offset = (page - 1) * self.SEARCH_LIMIT_PLAYLIST
+        r = await self.call_api(
+                self.api.cloudsearch_get_web,
+                query, self.SEARCH_TYPE_PLAYLIST,
+                self.SEARCH_LIMIT_PLAYLIST, offset,
+                notice='Fetching search results...',
+                err_msg='Failed to fetch search results')
+        if r['result']['playlistCount'] > 0:
+            for p in r['result']['playlists']:
+                self.logger.info(
+                        '{:10}. {} - {}'
+                        .format(p['id'], p['name'], p['creator']['nickname']))
+            self.logger.info(
+                    'Found {} playlist(s) in total. Page {} / {}.'
+                    .format(r['result']['playlistCount'], page,
+                        math.ceil(r['result']['playlistCount'] / self.SEARCH_LIMIT_PLAYLIST)))
+        else:
+            self.logger.info('No playlist(s) found')
+
+    async def _search_program(self, page=None, *terms):
+        page, query = self._parse_search_args(page, terms)
+
+        offset = (page - 1) * self.SEARCH_LIMIT_PROGRAM
+        r = await self.call_api(
+                self.api.cloudsearch_get_web,
+                query, self.SEARCH_TYPE_PROGRAM,
+                self.SEARCH_LIMIT_PROGRAM, offset,
+                notice='Fetching search results...',
+                err_msg='Failed to fetch search results')
+        if r['result']['djprogramCount'] > 0:
+            for p in r['result']['djprograms']:
+                self.logger.info(
+                        '{:10}. {} - {} ({})'
+                        .format(p['id'], p['name'],
+                            p['dj']['brand'], p['dj']['nickname']))
+            self.logger.info(
+                    'Found {} program(s) in total. Page {} / {}.'
+                    .format(r['result']['djprogramCount'], page,
+                        math.ceil(r['result']['djprogramCount'] / self.SEARCH_LIMIT_PROGRAM)))
+        else:
+            self.logger.info('No program(s) found')
+
+    async def _search_user(self, page=None, *terms):
+        page, query = self._parse_search_args(page, terms)
+
+        offset = (page - 1) * self.SEARCH_LIMIT_USER
+        r = await self.call_api(
+                self.api.cloudsearch_get_web,
+                query, self.SEARCH_TYPE_USER,
+                self.SEARCH_LIMIT_USER, offset,
+                notice='Fetching search results...',
+                err_msg='Failed to fetch search results')
+        if r['result']['userprofileCount'] > 0:
+            for u in r['result']['userprofiles']:
+                if u['signature']:
+                    self.logger.info(
+                            '{:10}. {} ({})'
+                            .format(u['userId'], u['nickname'], u['signature']))
+                else:
+                    self.logger.info(
+                            '{:10}. {}'
+                            .format(u['userId'], u['nickname']))
+            self.logger.info(
+                    'Found {} user(s) in total. Page {} / {}.'
+                    .format(r['result']['userprofileCount'], page,
+                        math.ceil(r['result']['userprofileCount'] / self.SEARCH_LIMIT_USER)))
+        else:
+            self.logger.info('No user(s) found')
+
+    async def run(self, name, search_type=None, *rest):
+        if search_type is None:
+            search_type = 'song'
+        search_type = search_type.lower()
+        sub_cmd = self._sub_commands.get(search_type, None)
+        if callable(sub_cmd):
+            await self.call_sub_command(search_type, sub_cmd, *rest)
+        else:
+            raise PlayerCmdError('Unknown object: {}'.format(search_type))
 
 
 class Mpg123:
