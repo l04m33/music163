@@ -816,9 +816,14 @@ class CmdSearch(PlayerCommand):
 
     async def run(self, name, search_type=None, *rest):
         if search_type is None:
-            search_type = 'song'
-        search_type = search_type.lower()
-        sub_cmd = self._sub_commands.get(search_type, None)
+            raise PlayerCmdError('What to search for?')
+        search_type_lower = search_type.lower()
+        if search_type_lower not in \
+                ['song', 'artist', 'album', 'playlist', 'program', 'user']:
+            rest = list(rest)
+            rest.insert(0, search_type)
+            search_type_lower = 'simple'
+        sub_cmd = self._sub_commands.get(search_type_lower, None)
         if callable(sub_cmd):
             await self.call_sub_command(search_type, sub_cmd, *rest)
         else:
