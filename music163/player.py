@@ -819,7 +819,7 @@ class CmdSearch(PlayerCommand):
             raise PlayerCmdError('What to search for?')
         search_type_lower = search_type.lower()
         if search_type_lower not in \
-                ['song', 'artist', 'album', 'playlist', 'program', 'user']:
+                ['song', 'artist', 'album', 'playlist', 'program', 'user', 'simple']:
             rest = list(rest)
             rest.insert(0, search_type)
             search_type_lower = 'simple'
