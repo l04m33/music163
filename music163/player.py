@@ -176,8 +176,7 @@ class CmdPlay(PlayerCommand):
                 err_msg='Failed to fetch recommended playlist')
         self.player.set_playlist(r['recommend'])
         self.player.reset_current_song()
-        # TODO: Error handling for failed requests
-        asyncio.ensure_future(self.player.play_next_song())
+        await self.player.play_next_song()
 
     async def _play_playlist(self, pl_id=None):
         if pl_id is None:
@@ -193,7 +192,7 @@ class CmdPlay(PlayerCommand):
                 err_msg='Failed to fetch playlist {}'.format(pl_id))
         self.player.set_playlist(r['result']['tracks'])
         self.player.reset_current_song()
-        asyncio.ensure_future(self.player.play_next_song())
+        await self.player.play_next_song()
 
     async def _play_song(self, *song_ids):
         if len(song_ids) == 0:
@@ -209,7 +208,7 @@ class CmdPlay(PlayerCommand):
                 err_msg='Failed to fetch song(s)')
         self.player.set_playlist(r['songs'])
         self.player.reset_current_song()
-        asyncio.ensure_future(self.player.play_next_song())
+        await self.player.play_next_song()
 
     async def _play_page(self, page_url=None):
         if page_url is None:
@@ -253,7 +252,7 @@ class CmdPlay(PlayerCommand):
                 err_msg='Failed to fetch song(s)')
         self.player.set_playlist(r['songs'])
         self.player.reset_current_song()
-        asyncio.ensure_future(self.player.play_next_song())
+        await self.player.play_next_song()
 
     async def _play_radio(self, n_songs=None):
         if n_songs is None:
@@ -285,7 +284,7 @@ class CmdPlay(PlayerCommand):
             self.player.set_playlist(song_list[:n_songs])
 
         self.player.reset_current_song()
-        asyncio.ensure_future(self.player.play_next_song())
+        await self.player.play_next_song()
 
     async def _play_program(self, prog_id=None):
         if prog_id is None:
@@ -301,7 +300,7 @@ class CmdPlay(PlayerCommand):
                 err_msg='Failed to fetch program: {}'.format(prog_id))
         self.player.set_playlist([r['program']['mainSong']])
         self.player.reset_current_song()
-        asyncio.ensure_future(self.player.play_next_song())
+        await self.player.play_next_song()
 
     async def _play_none(self):
         self.player.set_playlist([])
@@ -317,7 +316,7 @@ class CmdPlay(PlayerCommand):
             await self.call_sub_command(what, sub_cmd, *rest)
         elif what.isdigit():
             idx = int(what)
-            asyncio.ensure_future(self.player.play_song_in_playlist(idx))
+            await self.player.play_song_in_playlist(idx)
         else:
             raise PlayerCmdError('Unknown object: {}'.format(what))
 
@@ -898,17 +897,8 @@ class Mpg123:
                 cmd_cls, cmd_name, args = res
                 try:
                     await self.invoke_player_command(cmd_cls, cmd_name, *args)
-                except PlayerAPIError as e:
-                    api_ret = e.args[0]
-                    err_msg = e.args[1]
-                    self.logger.error('api: {}'.format(api_ret))
-                    if err_msg is not None:
-                        self.logger.error(err_msg)
-                except (PlayerError, PlayerCmdError) as e:
-                    err_msg = e.args[0]
-                    self.logger.error(err_msg)
-                except (requests.Timeout, requests.ConnectTimeout) as e:
-                    self.logger.error('Timed out')
+                except Exception as e:
+                    self.handle_cmd_exception(e)
             else:
                 self.process.stdin.write(line)
 
@@ -916,6 +906,26 @@ class Mpg123:
         async for line in self.process.stdout:
             #self.stdio[1].write('Message from mpg123: {}\n'.format(line).encode())
             self.handle_msg(line.strip())
+
+    def handle_cmd_exception(self, e):
+        if isinstance(e, PlayerAPIError):
+            api_ret = e.args[0]
+            err_msg = e.args[1]
+            self.logger.error('api: {}'.format(api_ret))
+            if err_msg is not None:
+                self.logger.error(err_msg)
+        elif isinstance(e, (PlayerError, PlayerCmdError)):
+            err_msg = e.args[0]
+            self.logger.error(err_msg)
+        elif isinstance(e, (requests.Timeout, requests.ConnectTimeout)):
+            self.logger.error('Timed out')
+        else:
+            raise e
+
+    def check_cmd_task(self, future):
+        exc = future.exception()
+        if exc is not None:
+            self.handle_cmd_exception(exc)
 
     def invoke_cmd(self, cmd):
         cmd += '\n'
@@ -957,7 +967,8 @@ class Mpg123:
             self.logger.info('Stopped')
             self.playing_state = 'stopped'
             if self.playlist:
-                asyncio.ensure_future(self.play_next_song())
+                task = asyncio.ensure_future(self.play_next_song())
+                task.add_done_callback(self.check_cmd_task)
         else:
             self.logger.warning('Unknown state: {}'.format(stat))
 
@@ -1031,7 +1042,9 @@ class Mpg123:
                 next_idx = (self.current_song + 1) % playlist_len
 
             if self.playlist[next_idx] is None:
-                asyncio.ensure_future(self.invoke_player_command(CmdPlay, 'play', 'radio'))
+                task = asyncio.ensure_future(
+                        self.invoke_player_command(CmdPlay, 'play', 'radio'))
+                task.add_done_callback(self.check_cmd_task)
             else:
                 await self.play_song_in_playlist(next_idx)
 
