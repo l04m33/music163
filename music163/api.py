@@ -176,8 +176,6 @@ class Music163API:
     ENC_AES_IV = b'0102030405060708'
     ENC_AES_KEY0 = b'0CoJUm6Qyw8W8jud'
 
-    ENC_SONG_ID_MAGIC = b'3go8&$8*3*3h0k(2)2'
-
     def __new__(cls, *args, **kwargs):
         obj = super(Music163API, cls).__new__(cls)
         for a in dir(obj):

@@ -92,12 +92,8 @@ class PlayerCommand:
         self.logger = logger
 
     async def call_api(self, api_func, *api_args, notice=None, err_msg=None):
-        if notice is not None:
-            self.logger.info(notice)
-        r = await self.player.loop.run_in_executor(
-                None, api_func.__call__, *api_args)
-        if r['code'] != 200:
-            raise PlayerAPIError(r, err_msg)
+        r = await self.player.call_api(
+                api_func, *api_args, notice=notice, err_msg=err_msg)
         return r
 
     async def fetch_playlists(self, user_id):
@@ -132,12 +128,6 @@ class PlayerCommand:
         except TypeError:
             raise PlayerCmdError(
                     'Too many arguments for {}'.format(repr(sub_name)))
-        if asyncio.iscoroutine(cr):
-            await cr
-
-    async def invoke_player_command(self, cmd_factory, *args):
-        cmd = cmd_factory(self.player, self.api, self.logger)
-        cr = cmd.run(*args)
         if asyncio.iscoroutine(cr):
             await cr
 
@@ -282,7 +272,8 @@ class CmdPlay(PlayerCommand):
             song_list = r['data'][:]
             song_list.append(None)
             self.player.set_playlist(song_list)
-            await self.invoke_player_command(CmdShuffle, 'false')
+            await self.player.invoke_player_command(
+                    CmdShuffle, 'shuffle', 'false')
         else:
             song_list = []
             self.logger.info('Fetching song(s)...')
@@ -893,17 +884,20 @@ class Mpg123:
             pass
         await self.process.wait()
 
+    async def invoke_player_command(self, cmd_factory, *args):
+        cmd = cmd_factory(self, self.api, self.logger)
+        cr = cmd.run(*args)
+        if asyncio.iscoroutine(cr):
+            await cr
+
     async def read_cmd(self):
         async for line in self.stdio[0]:
             cmd_line = line.decode()
             res = PlayerCommand.parse(cmd_line)
             if res is not None:
                 cmd_cls, cmd_name, args = res
-                cmd = cmd_cls(self, self.api, self.logger)
                 try:
-                    cr = cmd.run(cmd_name, *args)
-                    if asyncio.iscoroutine(cr):
-                        await cr
+                    await self.invoke_player_command(cmd_cls, cmd_name, *args)
                 except PlayerAPIError as e:
                     api_ret = e.args[0]
                     err_msg = e.args[1]
@@ -1037,7 +1031,7 @@ class Mpg123:
                 next_idx = (self.current_song + 1) % playlist_len
 
             if self.playlist[next_idx] is None:
-                asyncio.ensure_future(self._cmd_play(b'play radio 0'))
+                asyncio.ensure_future(self.invoke_player_command(CmdPlay, 'play', 'radio'))
             else:
                 await self.play_song_in_playlist(next_idx)
 
