@@ -919,6 +919,8 @@ class Mpg123:
             self.logger.error(err_msg)
         elif isinstance(e, (requests.Timeout, requests.ConnectTimeout)):
             self.logger.error('Timed out')
+        elif isinstance(e, requests.ConnectionError):
+            self.logger.error('Failed to connect to the server')
         else:
             raise e
 
