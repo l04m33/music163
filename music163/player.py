@@ -917,7 +917,7 @@ class Mpg123:
         elif isinstance(e, (PlayerError, PlayerCmdError)):
             err_msg = e.args[0]
             self.logger.error(err_msg)
-        elif isinstance(e, (requests.Timeout, requests.ConnectTimeout)):
+        elif isinstance(e, (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout)):
             self.logger.error('Timed out')
         elif isinstance(e, requests.ConnectionError):
             self.logger.error('Failed to connect to the server')
