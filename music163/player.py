@@ -327,7 +327,7 @@ class CmdPlay(PlayerCommand):
         if callable(sub_cmd):
             await self.call_sub_command(what, sub_cmd, *rest)
         elif what.isdigit():
-            self.player.scrobble()
+            self.player.scrobble(end_method='ui')
             idx = int(what)
             await self.player.play_song_in_playlist(idx)
         else:
@@ -1014,7 +1014,7 @@ class Mpg123:
         elif stat == 0:
             self.logger.info('Stopped')
             self.playing_state = 'stopped'
-            self.scrobble()
+            self.scrobble(end_method='ui')
             if self.playlist:
                 task = asyncio.ensure_future(self.play_next_song())
                 task.add_done_callback(self.check_cmd_task)
@@ -1110,7 +1110,7 @@ class Mpg123:
                     err_msg='Failed to send scrobbling log(s)'))
         task.add_done_callback(self.check_cmd_task)
 
-    def scrobble(self):
+    def scrobble(self, end_method='interrupt'):
         if self.scrobbling and self.playlist \
                 and self.current_song >= 0 and self.frame_info:
             try:
@@ -1125,7 +1125,7 @@ class Mpg123:
             logs = [{
                 'action': 'play',
                 'json': {
-                    'end': 'interrupt',
+                    'end': end_method,
                     'id': last_song['id'],
                     'time': seconds_played,
                     'type': 'song',
@@ -1134,7 +1134,7 @@ class Mpg123:
             self.send_scrobbling_logs(logs)
 
     def set_playlist(self, playlist):
-        self.scrobble()
+        self.scrobble(end_method='interrupt')
         self.playlist = playlist
         self.shuffle = bool(self.shuffle)
 
