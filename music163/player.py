@@ -91,6 +91,18 @@ class PlayerCommand:
         self.api = api
         self.logger = logger
 
+    def parse_bool_state(self, state, old_state):
+        if state is None:
+            state = not old_state
+        else:
+            if state.lower() == 'true' or \
+                    (state.isdigit() and int(state) != 0):
+                state = True
+            elif state.lower() == 'false' or \
+                    (state.isdigit() and int(state) == 0):
+                state = False
+        return state
+
     async def call_api(self, api_func, *api_args, notice=None, err_msg=None):
         r = await self.player.call_api(
                 api_func, *api_args, notice=notice, err_msg=err_msg)
@@ -315,6 +327,7 @@ class CmdPlay(PlayerCommand):
         if callable(sub_cmd):
             await self.call_sub_command(what, sub_cmd, *rest)
         elif what.isdigit():
+            self.player.scrobble()
             idx = int(what)
             await self.player.play_song_in_playlist(idx)
         else:
@@ -340,24 +353,14 @@ class CmdShuffle(PlayerCommand):
     NAMES = ['shuffle']
 
     def run(self, _name, state=None):
-        if state is None:
-            if self.player.shuffle:
-                self.player.shuffle = False
+        state = self.parse_bool_state(state, self.player.shuffle)
+        if state:
+            if self.player.playlist:
+                self.player.shuffle_playlist()
             else:
-                if self.player.playlist:
-                    self.player.shuffle_playlist()
-                else:
-                    self.player.shuffle = True
+                self.player.shuffle = True
         else:
-            if state.lower() == 'true' or \
-                    (state.isdigit() and int(state) != 0):
-                if self.player.playlist:
-                    self.player.shuffle_playlist()
-                else:
-                    self.player.shuffle = True
-            elif state.lower() == 'false' or \
-                    (state.isdigit() and int(state) == 0):
-                self.player.shuffle = False
+            self.player.shuffle = False
 
         self.logger.info('Shuffle: {}'.format(bool(self.player.shuffle)))
 
@@ -852,6 +855,15 @@ class CmdDeletePlaylist(PlayerCommand):
         self.logger.info('Deleted playlist {}'.format(r['id']))
 
 
+class CmdScrobble(PlayerCommand):
+    NAMES = ['scrobble']
+
+    async def run(self, _name, state=None):
+        state = self.parse_bool_state(state, self.player.scrobbling)
+        self.player.scrobbling = state
+        self.logger.info('Scrobbling: {}'.format(bool(self.player.scrobbling)))
+
+
 class Mpg123:
     MSG_TYPE_RE = re.compile(b'^(@[A-Za-z0-9]+)\s+')
     REQUEST_TIMEOUT = (5, 5)
@@ -867,8 +879,10 @@ class Mpg123:
         self.playlist = []
         self.current_song = -1
         self.shuffle = False
+        self.scrobbling = False
         self.default_bitrate = 320000
         self.playing_state = 'stopped'
+        self.frame_info = None
         self.logger_factory = logger_factory
         self.msg_handlers = {
             b'@R': self._on_version_info,
@@ -1000,6 +1014,7 @@ class Mpg123:
         elif stat == 0:
             self.logger.info('Stopped')
             self.playing_state = 'stopped'
+            self.scrobble()
             if self.playlist:
                 task = asyncio.ensure_future(self.play_next_song())
                 task.add_done_callback(self.check_cmd_task)
@@ -1086,7 +1101,40 @@ class Mpg123:
             self.current_song = -1
             raise PlayerError('Playlist is empty')
 
+    def send_scrobbling_logs(self, logs):
+        logs = self.api.format_scrobbling_logs(logs)
+        task = asyncio.ensure_future(
+                self.call_api(
+                    self.api.feedback_weblog, logs,
+                    notice='Sending scrobbling log(s)...',
+                    err_msg='Failed to send scrobbling log(s)'))
+        task.add_done_callback(self.check_cmd_task)
+
+    def scrobble(self):
+        if self.scrobbling and self.playlist \
+                and self.current_song >= 0 and self.frame_info:
+            try:
+                last_song = self.playlist[self.current_song]
+            except IndexError:
+                last_song = None
+
+            if last_song is None:
+                return
+
+            seconds_played = int(self.frame_info[2])
+            logs = [{
+                'action': 'play',
+                'json': {
+                    'end': 'interrupt',
+                    'id': last_song['id'],
+                    'time': seconds_played,
+                    'type': 'song',
+                }
+            }]
+            self.send_scrobbling_logs(logs)
+
     def set_playlist(self, playlist):
+        self.scrobble()
         self.playlist = playlist
         self.shuffle = bool(self.shuffle)
 

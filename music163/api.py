@@ -175,6 +175,12 @@ class Music163API:
         data=['pid'],
     )
 
+    feedback_weblog = APIFunc(
+        '/weapi/feedback/weblog',
+        encrypted=True,
+        data=['logs'],
+    )
+
     ENC_RSA_KEY = RSA.construct((
         int(b'00e0b509f6259df8642dbc3566290147' +
             b'7df22677ec152b5ff68ace615bb7b725' +
@@ -286,3 +292,6 @@ class Music163API:
             raise APIError(
                     'Failed to decode text as JSON: {}'
                     .format(resp.text))
+
+    def format_scrobbling_logs(self, logs):
+        return json.dumps(logs)
