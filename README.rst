@@ -224,6 +224,27 @@ ID 時默認選擇「我喜歡的音樂」歌單。
 
     unfav
 
+創建歌單「createplaylist」
+--------------------------
+
+``createplaylist`` 命令新建一個空白歌單，可以縮寫爲 ``cpl`` ，在命令後
+填寫新歌單的名稱即可：
+
+.. code-block:: text
+
+    createplaylist <歌單名稱>
+
+刪除歌單「deleteplaylist」
+--------------------------
+
+``deleteplaylist`` 命令刪除一個歌單，可以縮寫爲 ``dpl`` ，參數爲歌單 ID ：
+
+.. code-block:: text
+
+    deleteplaylist <歌單 ID>
+
+此命令刪除歌單前不會做二次確認，請謹慎操作。
+
 搜索資源「search」
 ------------------
 
@@ -273,6 +294,19 @@ ID 時默認選擇「我喜歡的音樂」歌單。
 .. code-block:: text
 
     search playlist 2 搖滾
+
+記錄歌曲播放信息「scrobble」
+----------------------------
+
+``scrobble`` 命令指定是否向雲音樂服務器發送歌曲播放信息（用以記錄
+「聽歌排行」和提供歌曲推薦，發送的內容包括所播放的歌曲以及播放時間等）：
+
+.. code-block:: text
+
+    scrobble [<狀態>]
+
+狀態可以爲 true/false 或者 1/0, 分別代表「有效」和「無效」。省略狀態
+參數時根據當前狀態進行切換。
 
 其他命令
 --------
