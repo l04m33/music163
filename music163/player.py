@@ -820,6 +820,38 @@ class CmdSearch(PlayerCommand):
             raise PlayerCmdError('Unknown object: {}'.format(search_type))
 
 
+class CmdCreatePlaylist(PlayerCommand):
+    NAMES = ['createplaylist', 'cpl']
+
+    async def run(self, _name, *pl_name_segs):
+        if len(pl_name_segs) == 0:
+            raise PlayerCmdError("What's the name of the new playlist?")
+        pl_name = ' '.join(pl_name_segs)
+        r = await self.call_api(
+                self.api.playlist_create, pl_name,
+                notice='Creating playlist {}...'.format(repr(pl_name)),
+                err_msg='Failed to create playlist')
+        self.logger.info('Created new playlist {}'.format(r['id']))
+
+
+class CmdDeletePlaylist(PlayerCommand):
+    NAMES = ['deleteplaylist', 'dpl']
+
+    async def run(self, _name, pl_id=None):
+        if pl_id is None:
+            raise PlayerCmdError('Which playlist to delete?')
+        try:
+            pl_id = int(pl_id)
+        except ValueError:
+            raise PlayerCmdError('Invalid playlist: {}'.format(pl_id))
+
+        r = await self.call_api(
+                self.api.playlist_delete, pl_id,
+                notice='Deleting playlist {}...'.format(pl_id),
+                err_msg='Failed to delete playlist {}'.format(pl_id))
+        self.logger.info('Deleted playlist {}'.format(r['id']))
+
+
 class Mpg123:
     MSG_TYPE_RE = re.compile(b'^(@[A-Za-z0-9]+)\s+')
     REQUEST_TIMEOUT = (5, 5)

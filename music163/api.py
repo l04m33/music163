@@ -163,6 +163,18 @@ class Music163API:
         data=['s', 'limit'],
     )
 
+    playlist_create = APIFunc(
+        '/weapi/playlist/create',
+        encrypted=True,
+        data=['name'],
+    )
+
+    playlist_delete = APIFunc(
+        '/weapi/playlist/delete',
+        encrypted=True,
+        data=['pid'],
+    )
+
     ENC_RSA_KEY = RSA.construct((
         int(b'00e0b509f6259df8642dbc3566290147' +
             b'7df22677ec152b5ff68ace615bb7b725' +
