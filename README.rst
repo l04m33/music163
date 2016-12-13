@@ -69,7 +69,7 @@
 
 成功登錄後，用戶認證信息保存在 ``$HOME/.music163/lastfm.json`` 中。
 
-要啓用 Last.fm 的 scrobbling 功能，參見 ``scrobble`` 命令。
+要啓用 Last.fm 的 scrobbling 功能，參見內置播放器的 ``scrobble`` 命令。
 
 使用內置播放器
 ==============
