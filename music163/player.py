@@ -1197,7 +1197,8 @@ class Mpg123:
             }]
             self.send_scrobbling_logs(logs)
 
-            if self.lastfm_api is not None and self.frame_info[2] > 30 and \
+            if self.lastfm_api is not None and \
+                    (self.frame_info[2] + self.frame_info[3]) > 30 and \
                     (self.frame_info[2] >= self.frame_info[3] or \
                         self.frame_info[2] >= 240):
                 self.logger.info('Sending scrobbling log to LastFM...')
