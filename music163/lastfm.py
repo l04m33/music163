@@ -8,7 +8,7 @@ from .api import APIError
 from .version import __version__
 
 
-LAST_FM_API_ROOT = 'http://ws.audioscrobbler.com/2.0/'
+LAST_FM_API_ROOT = 'https://ws.audioscrobbler.com/2.0/'
 
 
 class LastFMSession(requests.Session):
