@@ -1,17 +1,24 @@
 import sys
+import os
 import io
 import re
 import asyncio
 import hashlib
+import json
 import urllib.parse as urlparse
 
 from lxml import etree
 from .api import (MUSIC_163_SCHEME, MUSIC_163_DOMAIN)
 from .playlist import (DEFAULT_PLAYLIST_FORMAT, generate_playlist)
 from .player import Mpg123
+from .lastfm import (LastFMAPI, lastfm_login)
 
 
 DEFAULT_BIT_RATE = 320000
+RES_PATH = os.path.join(os.path.expanduser('~'), '.music163')
+COOKIES_FILE = os.path.join(RES_PATH, 'cookies.txt')
+PROFILE_FILE = os.path.join(RES_PATH, 'profile.json')
+LASTFM_INFO_FILE = os.path.join(RES_PATH, 'lastfm.json')
 
 
 class InvalidCmdError(Exception):
@@ -141,10 +148,24 @@ def cmd_player(api, argv):
         binary = argv.pop(0)
     except IndexError:
         binary = None
-    player = Mpg123(api=api, binary=binary)
+    try:
+        with open(LASTFM_INFO_FILE, 'r') as lfm_info_file:
+            lastfm_info = json.load(lfm_info_file)
+        lastfm_api = LastFMAPI(lastfm_info['api_key'], lastfm_info['shared_secret'])
+        lastfm_api.credentials['sk'] = lastfm_info['sk']
+    except FileNotFoundError:
+        lastfm_api = None
+    player = Mpg123(api=api, lastfm_api=lastfm_api, binary=binary)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(player.run())
     loop.close()
+
+
+def cmd_lastfm_login(api, argv):
+    api_key = argv.pop(0)
+    shared_secret = argv.pop(0)
+    lastfm_login(api_key, shared_secret, LASTFM_INFO_FILE)
+    print('Done.')
 
 
 def _cmd_generate_playlist(argv, api, song_list):
@@ -170,6 +191,9 @@ commands = {
         'recommended': cmd_play_recommended,
     },
     'player': cmd_player,
+    'lastfm': {
+        'login': cmd_lastfm_login,
+    }
 }
 
 

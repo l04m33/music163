@@ -6,6 +6,7 @@ import random
 import requests
 import asyncio
 import math
+from datetime import datetime
 from asyncio import (subprocess, streams)
 from concurrent.futures import FIRST_COMPLETED
 import urllib.parse as urlparse
@@ -868,11 +869,13 @@ class Mpg123:
     MSG_TYPE_RE = re.compile(b'^(@[A-Za-z0-9]+)\s+')
     REQUEST_TIMEOUT = (5, 5)
 
-    def __init__(self, binary=None, api=None, loop=None, logger_factory=AsyncLogger):
+    def __init__(self, binary=None, api=None, lastfm_api=None,
+            loop=None, logger_factory=AsyncLogger):
         if binary is None:
             binary = 'mpg123'
         self.binary = binary
         self.api = api
+        self.lastfm_api = lastfm_api
         if api is not None:
             api.set_request_timeout(self.REQUEST_TIMEOUT)
         self.loop = loop or asyncio.get_event_loop()
@@ -889,7 +892,7 @@ class Mpg123:
             b'@E': self._on_error,
             b'@P': self._on_play,
             b'@F': self._on_frame,
-            b'@S': self._on_ignore, # stream info
+            b'@S': self._on_stream_info, # stream info
             b'@I': self._on_ignore, # (ID3) info
             b'@H': self._on_help,
         }
@@ -975,6 +978,19 @@ class Mpg123:
         if exc is not None:
             self.handle_cmd_exception(exc)
 
+    def handle_scrobbling_exception(self, e):
+        if isinstance(e, (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout)):
+            self.logger.error('Scrobbler timed out')
+        elif isinstance(e, requests.ConnectionError):
+            self.logger.error('Failed to connect to the scrobbling server')
+        else:
+            raise e
+
+    def check_scrobbling_task(self, future):
+        e = future.exception()
+        if e is not None:
+            self.handle_scrobbling_exception(e)
+
     def invoke_cmd(self, cmd):
         cmd += '\n'
         self.process.stdin.write(cmd.encode())
@@ -1026,6 +1042,9 @@ class Mpg123:
         self.frame_info = \
                 (int(frame_info[0]), int(frame_info[1]),
                         float(frame_info[2]), float(frame_info[3]))
+
+    def _on_stream_info(self, msg):
+        self.now_playing()
 
     def _on_help(self, msg):
         if msg[3] != ord('{') and msg[3] != ord('}'):
@@ -1108,7 +1127,52 @@ class Mpg123:
                     self.api.feedback_weblog, logs,
                     notice='Sending scrobbling log(s)...',
                     err_msg='Failed to send scrobbling log(s)'))
-        task.add_done_callback(self.check_cmd_task)
+        task.add_done_callback(self.check_scrobbling_task)
+
+    def now_playing(self):
+        if self.scrobbling and self.playlist and self.current_song >= 0:
+            try:
+                cur_song = self.playlist[self.current_song]
+            except IndexError:
+                cur_song = None
+
+            if cur_song is None:
+                return
+
+            logs = [{
+                'action': 'play',
+                'json': {
+                    'id': cur_song['id'],
+                    'type': 'song',
+                }
+            }]
+            self.send_scrobbling_logs(logs)
+
+            if self.lastfm_api is not None:
+                self.logger.info('Sending Now-Playing info to LastFM...')
+                if cur_song['artists']:
+                    artist_name = cur_song['artists'][0]['name']
+                else:
+                    artist_name = 'Unknown Artist'
+                if cur_song['album']:
+                    album_name = cur_song['album']['name']
+                else:
+                    album_name = 'Unknown Album'
+                task = asyncio.ensure_future(
+                        self.loop.run_in_executor(
+                            None, self.lastfm_api.track_update_now_playing.__call__,
+                            cur_song['name'], artist_name, album_name))
+                task.add_done_callback(self.check_lastfm_api_task)
+
+    def check_lastfm_api_task(self, future):
+        try:
+            r = future.result()
+        except Exception as e:
+            self.handle_scrobbling_exception(e)
+            return
+        if r[0][0] != 200 or 'error' in r[1]:
+            self.logger.error('api: {}'.format(r))
+            self.logger.error( 'Failed to call LastFM API')
 
     def scrobble(self, end_method='interrupt'):
         if self.scrobbling and self.playlist \
@@ -1132,6 +1196,25 @@ class Mpg123:
                 }
             }]
             self.send_scrobbling_logs(logs)
+
+            if self.lastfm_api is not None and self.frame_info[2] > 30 and \
+                    (self.frame_info[2] >= self.frame_info[3] or \
+                        self.frame_info[2] >= 240):
+                self.logger.info('Sending scrobbling log to LastFM...')
+                if last_song['artists']:
+                    artist_name = last_song['artists'][0]['name']
+                else:
+                    artist_name = 'Unknown Artist'
+                if last_song['album']:
+                    album_name = last_song['album']['name']
+                else:
+                    album_name = 'Unknown Album'
+                task = asyncio.ensure_future(
+                        self.loop.run_in_executor(
+                            None, self.lastfm_api.track_scrobble.__call__,
+                            last_song['name'], artist_name, album_name,
+                            str(int(datetime.utcnow().timestamp()))))
+                task.add_done_callback(self.check_lastfm_api_task)
 
     def set_playlist(self, playlist):
         self.scrobble(end_method='interrupt')

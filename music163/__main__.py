@@ -3,25 +3,22 @@ import sys
 from http import cookiejar
 
 from .api import (APISession, Music163API, Profile)
-from .cmd import handle_cmd
+from .cmd import (handle_cmd, RES_PATH, COOKIES_FILE, PROFILE_FILE)
 
 
 def main():
-    res_path = os.path.join(os.path.expanduser('~'), '.music163')
-    if not os.path.isdir(res_path):
-        os.mkdir(res_path)
-    cookies_file = os.path.join(res_path, 'cookies.txt')
-    profile_file = os.path.join(res_path, 'profile.json')
+    if not os.path.isdir(RES_PATH):
+        os.mkdir(RES_PATH)
 
     session = APISession()
-    session.cookies = cookiejar.LWPCookieJar(cookies_file)
+    session.cookies = cookiejar.LWPCookieJar(COOKIES_FILE)
     try:
         session.cookies.load()
     except FileNotFoundError:
         pass
 
     profile = Profile()
-    profile.set_filename(profile_file)
+    profile.set_filename(PROFILE_FILE)
     try:
         profile.load()
     except FileNotFoundError:
