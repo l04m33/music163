@@ -2,7 +2,8 @@
 簡介
 ####
 
-這是一個簡單的（非官方）網易雲音樂命令行客戶端，使用 `mpg123`_ 作爲後端。
+這是一個簡單的（非官方）網易雲音樂命令行客戶端，使用 `mpg123`_ 作爲後端，
+支持將播放曲目同步到 Last.fm.
 
 所有加/解密相關代碼都是在 `NetEase-MusicBox`_ 的基礎上修改而來的。
 
@@ -50,6 +51,25 @@
     ❯ music163 login <手機號碼> <密碼>
 
 成功登錄後，用戶 cookies 和帳號信息保存在 ``$HOME/.music163`` 目錄下。
+
+登錄 Last.fm 帳號
+=================
+
+要登錄 Last.fm 並同步播放曲目（scrobbling），需要先在 http://www.last.fm/api/account/create
+頁面提交相應信息並獲取一組 API key 和 shared secret ，然後執行登錄命令：
+
+.. code-block:: text
+
+    ❯ music163 lastfm login <API key> <shared secret>
+    Authorization URL: http://www.last.fm/api/auth/?api_key=XXXX&token=XXXX
+    Please proceed to the URL above and authorize this app, then press Enter afterwards.
+
+這時在瀏覽器中打開程序提供的 Authorization URL ，登錄 Last.fm 帳號並允
+許訪問，再回到終端按下 Enter 鍵，等待程序完成登錄認證即可。
+
+成功登錄後，用戶認證信息保存在 ``$HOME/.music163/lastfm.json`` 中。
+
+要啓用 Last.fm 的 scrobbling 功能，參見 ``scrobble`` 命令。
 
 使用內置播放器
 ==============
@@ -307,6 +327,9 @@ ID 時默認選擇「我喜歡的音樂」歌單。
 
 狀態可以爲 true/false 或者 1/0, 分別代表「有效」和「無效」。省略狀態
 參數時根據當前狀態進行切換。
+
+如果啓用 scrobbling 功能並成功登錄了 Last.fm 帳號，歌曲播放信息會被同
+步到 Last.fm.
 
 其他命令
 --------
