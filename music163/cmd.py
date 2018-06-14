@@ -155,7 +155,7 @@ def cmd_player(api, argv):
         lastfm_api.credentials['sk'] = lastfm_info['sk']
     except FileNotFoundError:
         lastfm_api = None
-    player = Mpg123(api=api, lastfm_api=lastfm_api, binary=binary)
+    player = Mpg123(api=api, lastfm_api=lastfm_api, binary=binary, extra_args=argv)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(player.run())
     loop.close()

@@ -869,11 +869,14 @@ class Mpg123:
     MSG_TYPE_RE = re.compile(b'^(@[A-Za-z0-9]+)\s+')
     REQUEST_TIMEOUT = (5, 5)
 
-    def __init__(self, binary=None, api=None, lastfm_api=None,
-            loop=None, logger_factory=AsyncLogger):
+    def __init__(self, binary=None, extra_args=None, api=None,
+            lastfm_api=None, loop=None, logger_factory=AsyncLogger):
         if binary is None:
             binary = 'mpg123'
         self.binary = binary
+        if extra_args is None:
+            extra_args = []
+        self.extra_args = extra_args
         self.api = api
         self.lastfm_api = lastfm_api
         if api is not None:
@@ -902,7 +905,7 @@ class Mpg123:
         self.logger = self.logger_factory(self.stdio[1])
         self.process = \
                 await asyncio.create_subprocess_exec(
-                        self.binary, '--remote',
+                        self.binary, '--remote', *self.extra_args,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,

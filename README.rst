@@ -78,9 +78,18 @@
 
 .. code-block:: text
 
-    ❯ music163 player
+    ❯ music163 player [<mpg123> [<額外參數1>] [<額外參數2>] ...]
     --  Using player version: MPG123 (ThOr) v8
-     
+
+mpg123 參數是 ``mpg123`` 的可執行程序名稱，額外參數則會原封不動地傳遞給
+``mpg123`` 程序（具體可使用的參數見 ``man mpg123`` ）。例如，如果想要使用
+安裝在 ``/opt/music`` 下的 ``mpg123`` 實例，並指定通過 PulseAudio 輸出，
+可以執行如下命令：
+
+.. code-block:: text
+
+    ❯ music163 player /opt/music/bin/mpg123 --output pulse
+    --  Using player version: MPG123 (ThOr) v8
 
 行首帶 ``--`` 的內容是程序輸出的消息。播放器使用命令行操作（沒有提示符），
 直接輸入命令即可。
