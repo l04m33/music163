@@ -40,7 +40,8 @@ class APISession(requests.Session):
         # This referer header is needed for passing cross-site-request checks
         headers = {
             'Referer': urlparse.urlunparse((
-                MUSIC_163_SCHEME, MUSIC_163_DOMAIN, '/', '', '', ''))
+                MUSIC_163_SCHEME, MUSIC_163_DOMAIN, '/', '', '', '')),
+            'User-Agent': 'Mozilla/5.0 (X11; Fedora; Linux x86_64; rv:60.0) Gecko/20100101 Firefox/60.0',
         }
         self.headers.update(headers)
 
