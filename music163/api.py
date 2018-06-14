@@ -246,7 +246,7 @@ class Music163API:
 
     def _look_for_csrf_token(self, cookie_jar):
         for c in cookie_jar:
-            if c.name == '__csrf' and c.domain == MUSIC_163_DOMAIN:
+            if c.name == '__csrf' and c.domain.endswith(MUSIC_163_DOMAIN):
                 return c.value
         return None
 
